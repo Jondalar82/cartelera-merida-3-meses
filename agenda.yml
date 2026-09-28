@@ -1,0 +1,27 @@
+name: Cartelera Mérida 3 meses → Telegram
+
+on:
+  schedule:
+    # 08:00 hora peninsular aproximadamente (GitHub Actions usa UTC;
+    # se ejecuta a las 06:00 UTC en horario de verano y 07:00 UTC en invierno).
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  agenda:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+      - name: Ejecutar cartelera
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
+        run: python agenda.py
