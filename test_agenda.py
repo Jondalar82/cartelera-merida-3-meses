@@ -1,0 +1,65 @@
+from datetime import date, timedelta
+from unittest.mock import patch, MagicMock
+import agenda
+
+def test_three_month_window_is_dynamic():
+    assert agenda.END_DATE == agenda.add_months(agenda.TODAY, 3)
+
+def test_exact_end_date_is_included():
+    e = agenda.make_event("Teatro", agenda.END_DATE, agenda.END_DATE, "20:00",
+                          "Teatro María Luisa", "", "https://x", "F", category="Teatro")
+    assert agenda.is_valid_cartelera_event(e)
+
+def test_beyond_three_months_is_excluded():
+    e = agenda.make_event("Teatro", agenda.END_DATE + timedelta(days=1),
+                          agenda.END_DATE + timedelta(days=1), "20:00",
+                          "Teatro María Luisa", "", "https://x", "F", category="Teatro")
+    assert not agenda.is_valid_cartelera_event(e)
+
+def test_conference_is_excluded():
+    e = agenda.make_event("Congreso de cultura", agenda.TODAY, agenda.TODAY, "10:00",
+                          "Teatro María Luisa", "", "https://x", "F", category="Congreso")
+    assert e.genre == ""
+
+def test_exhibition_is_excluded():
+    e = agenda.make_event("Exposición de fotografía", agenda.TODAY, agenda.TODAY,
+                          "", "Centro Cultural Alcazaba", "", "https://x", "F",
+                          category="Exposición")
+    assert e.genre == ""
+
+def test_musical_based_on_movie_is_not_cinema():
+    e = agenda.make_event("El Gran Showman. El Musical", agenda.TODAY, agenda.TODAY,
+                          "20:00", "Palacio de Congresos",
+                          "Espectáculo inspirado en la película.", "https://x", "F",
+                          category="Musical")
+    assert e.genre == "Musical"
+
+def test_commercial_cinema_is_allowed():
+    e = agenda.make_event("La bola negra", agenda.TODAY, agenda.TODAY, "19:00",
+                          "Cines Victoria", "", "https://x", "F", category="Cine")
+    assert e.genre == "Cine"
+
+def test_neighborhood_school_event_is_excluded():
+    e = agenda.make_event("Fiesta escolar infantil", agenda.TODAY, agenda.TODAY,
+                          "17:00", "Centro Cultural Alcazaba",
+                          "Actividad escolar del barrio.", "https://x", "F",
+                          category="Infantil")
+    assert e.genre == ""
+
+def test_allowed_genres_only():
+    for g in agenda.GENRE_LABELS:
+        e = agenda.make_event(f"Evento {g}", agenda.TODAY, agenda.TODAY,
+                              "20:00", "Teatro María Luisa", "", "https://x", "F",
+                              category=g)
+        assert e.genre == g
+
+def test_message_contains_required_fields():
+    e = agenda.make_event("Concierto X", agenda.TODAY, agenda.TODAY, "20:00",
+                          "Palacio de Congresos", "", "https://entradas.example/x",
+                          "F", category="Concierto")
+    msg = agenda.compact_event_line(e)
+    assert "Concierto X" in msg
+    assert "20:00" in msg
+    assert "Concierto" in msg
+    assert "Palacio de Congresos" in msg
+    assert "Entradas / info" in msg

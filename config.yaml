@@ -1,0 +1,29 @@
+# Cartelera de espectáculos de Mérida — próximos 3 meses
+ciudad_principal: "Mérida"
+
+# La ventana NO es fija: agenda.py calcula desde hoy hasta la misma fecha de
+# dentro de 3 meses. Con fecha 28/09/2026: 28/09/2026 -> 28/12/2026.
+meses_ventana: 3
+
+# Máximo operativo de Telegram por ejecución.
+max_mensajes_totales: 4
+
+# Margen respecto al límite real de Telegram.
+max_chars: 3800
+
+# Fuentes principales. Se mantienen aquí para poder ampliarlas sin tocar lógica.
+fuentes:
+  ayuntamiento: "https://merida.es/agenda/"
+  teatro_maria_luisa: "https://www.teatromarialuisa.org/"
+  palacio_congresos: "https://www.palcongrex.es/agenda/tabla"
+  cines_victoria: "https://www.cinesvictoria.com/cine/M%C3%A9rida/"
+  cineclub_merida: "https://festivalcinemerida.com/cineclub/"
+
+# Tipos permitidos. No añadas otros si quieres mantener la cartelera estricta.
+generos_permitidos:
+  - "Teatro"
+  - "Musical"
+  - "Cine"
+  - "Monólogo"
+  - "Concierto"
+  - "Danza"
