@@ -61,6 +61,18 @@ VENUE_ALIASES = {
 
 GENRE_LABELS = ("Teatro", "Musical", "Cine", "Monólogo", "Concierto", "Danza")
 
+_MERIDA_NAV_PATH_BLACKLIST = {
+    "agenda", "buscar", "page", "category", "categoria",
+    "eventos", "events", "tag", "autor", "author",
+    "feed", "wp-json", "tribe_events"
+}
+
+_MERIDA_NAV_TEXT_BLACKLIST = {
+    "agenda", "agenda cultural", "ver todos",
+    "más información", "mas información",
+    "siguiente", "anterior", "inicio", "buscar"
+}
+
 @dataclass
 class Event:
     title: str
