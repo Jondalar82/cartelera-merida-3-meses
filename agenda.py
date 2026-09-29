@@ -406,60 +406,30 @@ def scrape_merida(max_pages=8) -> list[Event]:
     return events
 
 def scrape_palcongrex() -> list[Event]:
-    """Agenda específica de Mérida de Palcongrex.
-
-    La tabla general mezcla Mérida, Badajoz, Cáceres y Plasencia; la versión
-    anterior podía descartar eventos de Mérida porque guardaba el recinto como
-    ciudad. Aquí usamos la agenda /merida/ y filtramos explícitamente Mérida.
-    """
+    """Agenda oficial de Mérida de Palcongrex. La tabla actual usa tres columnas: Título | Tipo | Fecha inicio."""
     base = "https://www.palcongrex.es/merida/agenda/tabla"
-    events = []
-    seen = set()
-    for page in range(0, 8):
+    events, seen = [], set()
+    for page in range(8):
         url = base if page == 0 else f"{base}?page={page}"
         soup = fetch(url)
-        if not soup:
-            break
-        rows = soup.select("tr")
+        if not soup: break
         page_found = 0
-        for row in rows:
-            cells = [clean_text(x.get_text(" ", strip=True), 300) for x in row.select("td, th")]
-            if len(cells) < 4:
-                continue
-            # Tabla Mérida: Título | Palacio de congresos | Tipo | Fecha inicio
-            title, palace, typ, date_text = cells[:4]
-            if not title or norm(title) in {"título", "titulo"}:
-                continue
-            if norm(palace) not in {"mérida", "merida", "palacio de congresos"}:
-                continue
-            if not re.search(r"\d{1,2}\s+[A-Za-zÁÉÍÓÚáéíóúñÑ]+\s+\d{4}", date_text):
-                continue
+        for row in soup.select("tr"):
+            cells = [clean_text(x.get_text(" ", strip=True), 300) for x in row.select("td")]
+            if len(cells) < 3: continue
+            title, typ, date_text = cells[:3]
             st, en = parse_date(date_text)
-            if not st or not (TODAY <= st <= END_DATE):
-                continue
-            key = (norm(title), st.isoformat())
-            if key in seen:
-                continue
+            if not title or not st or not (TODAY <= st <= END_DATE): continue
+            key=(norm(title),st.isoformat())
+            if key in seen: continue
             seen.add(key)
-            href = ""
-            # Enlace específico de la ficha si la tabla lo proporciona.
-            a = row.find("a", href=True)
-            if a:
-                href = urljoin(url, a.get("href", ""))
-            ev = make_event(title, st, en, "", "Palacio de Congresos", "", href or url,
-                            "Palcongrex", city="Mérida", category=typ)
-            # Palcongrex usa "Espectáculos" como categoría paraguas para teatro,
-            # humor, magia, circo y grandes shows. Si el título no contiene una
-            # palabra suficiente para clasificarlo, sigue siendo un espectáculo
-            # escénico válido para esta cartelera.
-            if not ev.genre and norm(typ) == "espectáculos":
-                ev.genre = "Teatro"
-            if ev.genre:
-                events.append(ev)
-                page_found += 1
-        if page_found == 0 and page > 0:
-            break
+            a=row.find("a",href=True); href=urljoin(url,a.get("href")) if a else url
+            ev=make_event(title,st,en,"","Palacio de Congresos","",href,"Palcongrex",city="Mérida",category=typ)
+            if norm(typ)=="espectáculos": ev.genre="Teatro"
+            if ev.genre: events.append(ev); page_found+=1
+        if page_found==0 and page>0: break
     return events
+
 
 
 # ---------------------------------------------------------------------------
@@ -577,80 +547,49 @@ def dedupe(events: list[Event]) -> list[Event]:
     return list(result.values())
 
 def scrape_teatro_maria_luisa() -> list[Event]:
-    """Programa oficial completo, recorriendo las páginas de programación.
-
-    No usamos enlaces de /events/categories/ como eventos. Las fichas reales
-    /events/<slug>/ son las únicas que entran en la cartelera.
-    """
-    base = "https://www.teatromarialuisa.org/"
-    links = {}
-    for page in range(0, 8):
-        url = base if page == 0 else f"{base}?pno={page+1}"
-        soup = fetch(url)
-        if not soup:
-            break
-        before = len(links)
-        for a in soup.select('a[href*="/events/"]'):
-            href = urljoin(base, a.get("href", ""))
-            title = clean_text(a.get_text(" ", strip=True), 180)
-            path = urlparse(href).path.rstrip("/") + "/"
-            if not href or "/events/categories/" in href or len(title) < 4:
-                continue
-            if path.endswith("/events/"):
-                continue
-            links[href] = title
-        if len(links) == before and page > 1:
-            break
-
-    events = []
-    for href, fallback_title in links.items():
-        detail = fetch(href)
-        if not detail:
-            continue
-        title_node = detail.select_one("h1")
-        title = clean_text(title_node.get_text(" ", strip=True), 180) if title_node else fallback_title
-        if not title or norm(title) in _MERIDA_NAV_TEXT_BLACKLIST:
-            continue
-        page_text = clean_text(detail.get_text(" ", strip=True), 9000)
-        st, en = parse_date(page_text)
-        if not st or not (TODAY <= st <= END_DATE):
-            continue
-        tm = extract_time(page_text)
-        category = ""
+    """Recorre fichas reales /events/<slug>/ del Teatro María Luisa."""
+    base="https://www.teatromarialuisa.org/"; pages=[base]; seen_pages=set(); links={}
+    for _ in range(12):
+        if not pages: break
+        url=pages.pop(0)
+        if url in seen_pages: continue
+        seen_pages.add(url); soup=fetch(url)
+        if not soup: continue
+        for a in soup.select('a[href]'):
+            href=urljoin(base,a.get('href','')); title=clean_text(a.get_text(' ',strip=True),180); path=urlparse(href).path.rstrip('/')+'/'
+            if '/events/' in path and '/events/categories/' not in path and not path.endswith('/events/') and len(title)>=4: links[href]=title
+            low=norm(title)
+            if low in {'siguiente','next','older posts','más antiguos','mas antiguos'} or 'pno=' in href:
+                if href not in seen_pages and href not in pages: pages.append(href)
+        nxt=soup.select_one('a[rel="next"]')
+        if nxt and nxt.get('href'):
+            href=urljoin(url,nxt.get('href'))
+            if href not in seen_pages and href not in pages: pages.append(href)
+    events=[]
+    for href,fallback in links.items():
+        detail=fetch(href)
+        if not detail: continue
+        h=detail.select_one('h1'); title=clean_text(h.get_text(' ',strip=True),180) if h else fallback
+        text=clean_text(detail.get_text(' ',strip=True),9000); st,en=parse_date(text)
+        if not title or not st or not (TODAY<=st<=END_DATE): continue
+        cat=''
         for a in detail.select('a[href*="/events/categories/"]'):
-            txt = clean_text(a.get_text(" ", strip=True), 80)
-            if txt and norm(txt) not in _MERIDA_NAV_TEXT_BLACKLIST:
-                category = txt
-                break
-        paragraphs = []
-        for node in detail.select("main p, article p, .entry-content p, .elementor-widget-text-editor p"):
-            txt = clean_text(node.get_text(" ", strip=True), 700)
-            low = norm(txt)
-            if len(txt) >= 45 and not any(x in low for x in ["comprar entradas", "taquilla y descuentos", "más información"]):
-                paragraphs.append(txt)
-        desc = " ".join(paragraphs[:2])
-        ev = make_event(title, st, en, tm, "Teatro María Luisa", desc, href,
-                        "Teatro María Luisa", category=category, city="Mérida")
-        # Clasificación basada también en el texto real de la ficha.
-        if not ev.genre:
-            cat = norm(category + " " + title + " " + page_text[:1200])
-            if any(k in cat for k in ["monólogo", "monologo", "humor", "stand-up"]):
-                ev.genre = "Monólogo"
-            elif any(k in cat for k in ["música", "musica", "concierto", "piano", "ópera", "opera"]):
-                ev.genre = "Concierto"
-            elif "danza" in cat or "flamenco" in cat or "ballet" in cat:
-                ev.genre = "Danza"
-            elif "musical" in cat:
-                ev.genre = "Musical"
-            elif any(k in cat for k in ["teatro", "comedia", "drama", "circo"]):
-                ev.genre = "Teatro"
-            elif "cine" in cat:
-                ev.genre = "Cine"
-        if ev.genre:
-            ev.session_times = [tm] if tm else []
-            events.append(ev)
+            x=clean_text(a.get_text(' ',strip=True),80)
+            if x and norm(x) not in _MERIDA_NAV_TEXT_BLACKLIST: cat=x; break
+        tm=extract_time(text); descs=[]
+        for node in detail.select('main p,article p,.entry-content p,.elementor-widget-text-editor p'):
+            x=clean_text(node.get_text(' ',strip=True),700); low=norm(x)
+            if len(x)>=45 and not any(q in low for q in ['comprar entradas','taquilla y descuentos','más información']): descs.append(x)
+        ev=make_event(title,st,en,tm,'Teatro María Luisa',' '.join(descs[:2]),href,'Teatro María Luisa',category=cat,city='Mérida')
+        t=norm(cat+' '+title+' '+text[:1600])
+        if any(k in t for k in ['monólogo','monologo','humor','stand-up']): ev.genre='Monólogo'
+        elif any(k in t for k in ['música','musica','concierto','piano','ópera','opera']): ev.genre='Concierto'
+        elif any(k in t for k in ['danza','flamenco','ballet']): ev.genre='Danza'
+        elif 'musical' in t: ev.genre='Musical'
+        elif any(k in t for k in ['teatro','comedia','drama','circo']): ev.genre='Teatro'
+        elif 'cine' in t: ev.genre='Cine'
+        if ev.genre: ev.session_times=[tm] if tm else []; events.append(ev)
     return events
-
 
 def _extract_price(text: str, patterns: list[str]) -> str:
     """Extrae solo importes realmente acompañados de símbolo €; evita capturar días."""
@@ -896,6 +835,7 @@ def collect_events() -> list[Event]:
         try:
             found = fn()
             logging.info("%s: %d candidatos", name, len(found))
+            if not found: logging.warning("%s devolvió 0 candidatos", name)
             all_events.extend(found)
         except Exception as exc:
             logging.warning("%s falló: %s", name, exc)

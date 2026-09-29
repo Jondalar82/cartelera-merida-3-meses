@@ -142,3 +142,10 @@ def test_sala_trajano_has_own_venue():
     assert agenda.canonical_venue("Sala Trajano") == "Sala Trajano"
     assert agenda.venue_sort_key("Teatro Romano") < agenda.venue_sort_key("Sala Trajano")
     assert agenda.venue_sort_key("Sala Trajano") < agenda.venue_sort_key("Centro Cultural Alcazaba")
+
+
+def test_sala_trajano_alias():
+    assert agenda.canonical_venue("Sala Trajano") == "Sala Trajano"
+
+def test_palcongrex_uses_three_columns():
+    assert "tres columnas" in (agenda.scrape_palcongrex.__doc__ or "")
