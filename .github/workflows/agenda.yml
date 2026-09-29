@@ -2,9 +2,6 @@ name: Cartelera Mérida 3 meses → Telegram
 
 on:
   schedule:
-    # 08:00 hora peninsular aproximadamente (GitHub Actions usa UTC;
-    # se ejecuta a las 06:00 UTC en horario de verano y 07:00 UTC en invierno).
-    # Viernes, 08:00 aprox. hora peninsular en verano (07:00 en invierno).
     - cron: "0 6 * * 5"
   workflow_dispatch:
 
