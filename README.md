@@ -78,10 +78,18 @@ La cartelera comercial cambia con mucha más rapidez que la programación
 teatral. Por eso Cines Victoria se consulta en cada ejecución y solo se
 incluyen sesiones/fechas que la web publica realmente en ese momento.
 
-## Correcciones de esta versión
+## Formato Telegram
 
-- Corregida la definición de `_MERIDA_NAV_TEXT_BLACKLIST` y `_MERIDA_NAV_PATH_BLACKLIST`, evitando el fallo del scraper del Ayuntamiento.
-- Ventana dinámica: desde la fecha de ejecución hasta la misma fecha de dentro de 3 meses.
-- Workflow manual mediante `workflow_dispatch`.
-- Máximo 4 mensajes de Telegram por ejecución.
-- `TELEGRAM_CHAT_ID` debe ser el ID real del grupo/canal donde está el bot.
+La salida se organiza estrictamente por recinto y, dentro de cada recinto, por título/producción. El orden de recintos es:
+
+1. 🎬 Cines Victoria
+2. 📍 Palacio de Congresos
+3. 🎭 Teatro María Luisa
+4. 🏛️ Teatro Romano
+5. 📍 Centro Cultural Alcazaba
+6. 🎬 Cineclub Fórum
+7. 📍 Otros recintos
+
+Las sesiones del mismo título se agrupan bajo una única entrada y se ordenan cronológicamente. En cine se muestra de forma compacta título + sesiones + enlace. En teatro, musicales, monólogos, conciertos y danza se añade una descripción breve cuando la fuente la proporciona.
+
+Los enlaces priorizan la venta/taquilla detectada en la ficha oficial y, como respaldo, el enlace oficial del recinto. El envío mantiene un máximo de 4 mensajes por ejecución y puede cortar un recinto entre mensajes cuando sea necesario, sin alterar el orden de la cartelera.

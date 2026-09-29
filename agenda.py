@@ -18,7 +18,7 @@ Excluye:
 - Eventos infantiles/escolares de barrio
 - Actos institucionales
 
-Telegram: HTML seguro, agrupación cronológica por meses y máximo 4 mensajes.
+Telegram: HTML seguro, agrupación por recinto y título, sesiones agrupadas y máximo 4 mensajes.
 """
 from __future__ import annotations
 
@@ -61,6 +61,25 @@ VENUE_ALIASES = {
 
 GENRE_LABELS = ("Teatro", "Musical", "Cine", "Monólogo", "Concierto", "Danza")
 
+# Orden fijo solicitado para Telegram.
+VENUE_ORDER = {
+    "Cines Victoria": 0,
+    "Palacio de Congresos": 1,
+    "Teatro María Luisa": 2,
+    "Teatro Romano": 3,
+    "Centro Cultural Alcazaba": 4,
+    "Cineclub Fórum": 5,
+    "Otros recintos": 6,
+}
+VENUE_TICKET_LINKS = {
+    "Cines Victoria": "https://www.cinesvictoria.com/cine/M%C3%A9rida/",
+    "Palacio de Congresos": "https://www.palcongrex.es/agenda/tabla",
+    "Teatro María Luisa": "https://www.teatromarialuisa.org/",
+    "Teatro Romano": "https://www.consorciomerida.org/",
+    "Centro Cultural Alcazaba": "https://merida.es/",
+    "Cineclub Fórum": "https://festivalcinemerida.com/cineclub/",
+}
+
 @dataclass
 class Event:
     title: str
@@ -93,6 +112,8 @@ def add_months(d: date, months: int) -> date:
 END_DATE = add_months(TODAY, 3)
 
 def canonical_venue(location: str, organizer: str = "") -> str:
+    if norm(organizer) == "cine club fórum" or norm(organizer) == "cine club forum":
+        return "Cineclub Fórum"
     v = (location or "").split(",", 1)[0]
     v = re.sub(r"\s*\([^)]*\)", "", v)
     v = re.sub(r"\s+", " ", v).strip()
@@ -747,94 +768,199 @@ def fmt_month(d: date) -> str:
               "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"]
     return f"{months[d.month-1]} {d.year}"
 
+
 def genre_icon(genre: str) -> str:
     return {
         "Teatro": "🎭", "Musical": "🎼", "Cine": "🎬",
         "Monólogo": "🎤", "Concierto": "🎵", "Danza": "💃"
     }.get(genre, "🎟️")
 
+
+def venue_icon(venue: str) -> str:
+    return {
+        "Cines Victoria": "🎬",
+        "Palacio de Congresos": "📍",
+        "Teatro María Luisa": "🎭",
+        "Teatro Romano": "🏛️",
+        "Centro Cultural Alcazaba": "📍",
+        "Cineclub Fórum": "🎬",
+    }.get(venue, "📍")
+
+
+def venue_sort_key(venue: str):
+    return (VENUE_ORDER.get(venue, 6), norm(venue))
+
+
+def event_group_key(ev: Event):
+    return (canonical_venue(ev.location, ev.organizer), norm(ev.title))
+
+
 def compact_event_line(ev: Event) -> str:
-    venue = canonical_venue(ev.location)
+    """Compatibilidad con tests/consumidores antiguos; la salida nueva usa grupos."""
+    venue = canonical_venue(ev.location, ev.organizer)
     when = fmt_date_es(ev.start)
-    if ev.end and ev.end != ev.start:
-        when += f" → {fmt_date_es(ev.end)}"
     if ev.time:
         when += f" · {html.escape(ev.time)}"
-    target = ev.ticket_url or ev.url
+    target = ev.ticket_url or ev.url or VENUE_TICKET_LINKS.get(venue, "")
     link = f' <a href="{html.escape(target, quote=True)}">🎟️ Entradas / info</a>' if target else ""
-    return (
-        f"• <b>{html.escape(ev.title)}</b> · {when}\n"
-        f"  {genre_icon(ev.genre)} {html.escape(ev.genre)} · 📍 {html.escape(venue)}{link}"
-    )
+    return (f"• <b>{html.escape(ev.title)}</b> · {when}\n"
+            f"  {genre_icon(ev.genre)} {html.escape(ev.genre)} · 📍 {html.escape(venue)}{link}")
 
-def split_month_messages(header: str, month_events: list[Event], max_chars: int) -> list[str]:
+
+def render_event_group(group: list[Event]) -> str:
+    """Renderiza un título/producción una sola vez y agrupa todas sus sesiones."""
+    first = sorted(group, key=lambda e: (e.start, e.time, norm(e.title)))[0]
+    title = html.escape(first.title)
+    genre = first.genre
+
+    sessions = []
+    seen = set()
+    for ev in sorted(group, key=lambda e: (e.start, e.time, norm(e.title))):
+        key = (ev.start, ev.time)
+        if key in seen:
+            continue
+        seen.add(key)
+        when = fmt_date_es(ev.start)
+        if ev.time:
+            when += f" · {html.escape(ev.time)}"
+        sessions.append(f"    {when}")
+
+    block = f"• <b>{title}</b>\n" + "\n".join(sessions)
+
+    # El cine se mantiene limpio: título + todas las sesiones + enlace.
+    # Para el resto añadimos una descripción breve cuando existe.
+    if genre != "Cine":
+        desc = ""
+        for ev in group:
+            if ev.description and len(ev.description.strip()) > len(desc):
+                desc = ev.description.strip()
+        if desc:
+            desc = clean_text(desc, 280)
+            block += f"\n    {genre_icon(genre)} {html.escape(desc)}"
+
+    target = ""
+    for ev in group:
+        target = ev.ticket_url or ev.url
+        if ev.ticket_url:
+            break
+    if not target:
+        target = VENUE_TICKET_LINKS.get(canonical_venue(first.location, first.organizer), "")
+    if target:
+        block += f'\n    <a href="{html.escape(target, quote=True)}">🔗 Entradas / info</a>'
+    return block
+
+
+def render_venue_block(venue: str, groups: list[list[Event]]) -> str:
+    target = VENUE_TICKET_LINKS.get(venue, "")
+    link = f' <a href="{html.escape(target, quote=True)}">Entradas / info</a>' if target else ""
+    header = f"{venue_icon(venue)} <b>{html.escape(venue)}</b>{link}"
+    body = "\n\n".join(render_event_group(g) for g in groups)
+    return header + "\n" + body
+
+
+def build_venue_blocks(events: list[Event]) -> list[str]:
+    venues = {}
+    for ev in events:
+        venue = canonical_venue(ev.location, ev.organizer)
+        venues.setdefault(venue, {}).setdefault(norm(ev.title), []).append(ev)
+
+    blocks = []
+    for venue in sorted(venues, key=venue_sort_key):
+        groups = list(venues[venue].values())
+        groups.sort(key=lambda g: min((e.start, e.time, norm(e.title)) for e in g))
+        blocks.append(render_venue_block(venue, groups))
+    return blocks
+
+
+def split_blocks_into_messages(blocks: list[str], max_chars: int, max_total: int) -> list[str]:
+    """Divide en orden estricto, permitiendo cortar un recinto entre mensajes."""
     hard_cap = min(max_chars, TELEGRAM_HARD_LIMIT - SAFETY_MARGIN)
-    messages, current = [], header
-    for ev in month_events:
-        block = compact_event_line(ev)
-        candidate = current + "\n\n" + block
-        if len(candidate) > hard_cap and current != header:
-            messages.append(current)
-            current = header + "\n\n" + block
-        else:
-            current = candidate
-    if current != header:
-        messages.append(current)
-    return messages
+    prefix = "🎭 <b>CARTELERA DE MÉRIDA · PRÓXIMOS 3 MESES</b>\n\n"
+
+    def pack(parts: list[str]) -> list[str]:
+        messages = []
+        current = prefix
+        for part in parts:
+            # Un bloque de evento/recinto puede partirse sin cambiar su orden.
+            paragraphs = part.split("\n\n")
+            for paragraph in paragraphs:
+                candidate = current + ("\n\n" if current != prefix else "") + paragraph
+                if len(candidate) <= hard_cap:
+                    current = candidate
+                    continue
+                if current != prefix:
+                    messages.append(current.rstrip())
+                    current = prefix
+                # Si un párrafo individual es demasiado largo, se divide por líneas.
+                for line in paragraph.splitlines():
+                    candidate = current + ("\n" if current != prefix else "") + line
+                    if len(candidate) <= hard_cap:
+                        current = candidate
+                    else:
+                        if current != prefix:
+                            messages.append(current.rstrip())
+                        current = prefix + line
+        if current != prefix:
+            messages.append(current.rstrip())
+        return messages
+
+    messages = pack(blocks)
+    if len(messages) <= max_total:
+        return messages
+
+    # Modo compacto: conserva exactamente el mismo orden, títulos, sesiones y
+    # enlaces, pero elimina descripciones para que el límite de cuatro mensajes
+    # no obligue a eliminar eventos.
+    compact_blocks = []
+    for block in blocks:
+        lines = block.splitlines()
+        compact_lines = []
+        skip_description = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith(("🎭 ", "🎼 ", "🎤 ", "🎵 ", "💃 ")) and not stripped.startswith("🎭 <b>CARTELERA"):
+                skip_description = True
+                continue
+            if skip_description and stripped.startswith("<a href="):
+                skip_description = False
+            if skip_description:
+                continue
+            compact_lines.append(line)
+        compact_blocks.append("\n".join(compact_lines))
+
+    messages = pack(compact_blocks)
+    if len(messages) <= max_total:
+        return messages
+
+    # Último recurso: conservar el contenido completo y repartirlo secuencialmente
+    # entre cuatro mensajes por líneas. Nunca se reordenan recintos/eventos.
+    all_lines = []
+    for block in compact_blocks:
+        all_lines.extend(block.splitlines())
+        all_lines.append("")
+    buckets = [prefix.rstrip() for _ in range(max_total)]
+    idx = 0
+    for line in all_lines:
+        addition = ("\n" if buckets[idx] else "") + line
+        if len(buckets[idx]) + len(addition) > hard_cap and idx < max_total - 1:
+            idx += 1
+        addition = ("\n" if buckets[idx] else "") + line
+        buckets[idx] += addition
+    return [b.rstrip() for b in buckets if b.strip()]
+
 
 def build_messages(events: list[Event], config: dict) -> list[str]:
     max_chars = int(config.get("max_chars", 3800))
     max_total = int(config.get("max_mensajes_totales", 4))
-    months = {}
-    cursor = TODAY
-    while cursor <= END_DATE:
-        months.setdefault((cursor.year, cursor.month), [])
-        cursor = add_months(cursor, 1)
-        if cursor > END_DATE:
-            break
-    for ev in events:
-        months.setdefault((ev.start.year, ev.start.month), []).append(ev)
+    blocks = build_venue_blocks(events)
 
-    messages = []
-    for (year, month), evs in sorted(months.items()):
-        if not evs:
-            continue
-        end_month = min(END_DATE, date(year, month, calendar.monthrange(year, month)[1]))
-        header = (
-            f"🎭 <b>CARTELERA DE MÉRIDA</b>\n"
-            f"📆 {fmt_month(date(year, month, 1))}\n"
-            f"<i>Ventana: {TODAY.strftime('%d/%m/%Y')} → {END_DATE.strftime('%d/%m/%Y')}</i>"
-        )
-        messages.extend(split_month_messages(header, sorted(evs, key=lambda e: (e.start, e.time, norm(e.title))), max_chars))
-
-    if not messages:
-        messages = [(
-            f"🎭 <b>CARTELERA DE MÉRIDA</b>\n\n"
+    if not blocks:
+        return [(
+            f"🎭 <b>CARTELERA DE MÉRIDA · PRÓXIMOS 3 MESES</b>\n\n"
             f"No hay espectáculos confirmados que cumplan los filtros entre "
             f"{TODAY.strftime('%d/%m/%Y')} y {END_DATE.strftime('%d/%m/%Y')}."
         )]
-
-    # Mantener un máximo duro de 4 mensajes. Si hay exceso, se eliminan primero
-    # eventos de los meses más lejanos, nunca alterando el filtro.
-    if len(messages) <= max_total:
-        return messages
-
-    # Primera reducción: quitar el detalle de enlaces largos no es posible en
-    # Telegram; en su lugar se reduce a un evento por línea y se re-renderiza.
-    # Si aún excede, condensamos por evento sin perder los títulos.
-    all_lines = []
-    for ev in events:
-        all_lines.append(
-            f"• <b>{html.escape(ev.title)}</b> · {fmt_date_es(ev.start)}"
-            + (f" · {html.escape(ev.time)}" if ev.time else "")
-            + f" · {html.escape(ev.genre)} · 📍 {html.escape(canonical_venue(ev.location))}"
-            + (f' · <a href="{html.escape(ev.url, quote=True)}">Entradas/info</a>' if ev.url else "")
-        )
-    condensed = []
-    for i in range(0, len(all_lines), 25):
-        chunk = all_lines[i:i+25]
-        condensed.append("🎭 <b>CARTELERA DE MÉRIDA · PRÓXIMOS 3 MESES</b>\n\n" + "\n".join(chunk))
-    return condensed[:max_total]
+    return split_blocks_into_messages(blocks, max_chars, max_total)
 
 def telegram_send(token: str, chat_id: str, text: str, max_retries: int = 3):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
