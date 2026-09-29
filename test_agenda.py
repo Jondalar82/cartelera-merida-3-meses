@@ -149,3 +149,21 @@ def test_sala_trajano_alias():
 
 def test_palcongrex_uses_three_columns():
     assert "tres columnas" in (agenda.scrape_palcongrex.__doc__ or "")
+
+
+def test_event_renderer_has_no_repeated_genre_icon():
+    e = agenda.make_event("Antes de que alguien se vaya", date(2026, 10, 2), date(2026, 10, 2), "20:30",
+                          "Sala Trajano", "Comedia", "https://example.com", "Ayuntamiento de Mérida", category="Teatro")
+    text = agenda.render_event_group([e])
+    assert text.startswith("• <b>Antes de que alguien se vaya</b>")
+    assert "🎭 <b>Antes" not in text
+    assert "🎭 Comedia" not in text
+
+
+def test_merida_event_link_accepts_detail_and_rejects_navigation():
+    assert agenda._merida_is_real_event_link(
+        "https://merida.es/agenda/teatro-choriza-2/", "Teatro: Choriza"
+    )
+    assert not agenda._merida_is_real_event_link(
+        "https://merida.es/agenda/categoria/teatro/", "Teatro"
+    )

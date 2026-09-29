@@ -257,6 +257,17 @@ def make_event(title, start, end=None, time="", location="", description="", url
     classify(ev)
     return ev
 
+# Enlaces/textos de navegación que nunca deben interpretarse como eventos.
+_MERIDA_NAV_PATH_BLACKLIST = {
+    "agenda", "lista", "categoria", "categoría", "dia", "mes", "buscar",
+    "page", "pagina", "página", "events",
+}
+_MERIDA_NAV_TEXT_BLACKLIST = {
+    "eventos", "event", "agenda", "lista", "calendario", "buscar",
+    "siguiente", "anterior", "next", "previous", "más antiguos", "mas antiguos",
+    "ver más", "ver mas", "leer más", "leer mas", "comprar entradas",
+}
+
 def _merida_is_real_event_link(href: str, text: str) -> bool:
     if "?" in href or "merida.es/agenda/" not in href:
         return False
@@ -265,7 +276,8 @@ def _merida_is_real_event_link(href: str, text: str) -> bool:
     if len(segments) < 2:
         # Solo "/agenda" o "/agenda/": es la portada del listado, no un evento.
         return False
-    if any(norm(seg) in _MERIDA_NAV_PATH_BLACKLIST for seg in segments):
+    # El primer segmento siempre es /agenda/; solo bloqueamos subrutas de navegación.
+    if any(norm(seg) in _MERIDA_NAV_PATH_BLACKLIST for seg in segments[1:]):
         return False
     text_n = norm(text)
     if not text_n or text_n in _MERIDA_NAV_TEXT_BLACKLIST:
@@ -355,8 +367,9 @@ def scrape_merida(max_pages=8) -> list[Event]:
         # (a veces h3, a veces h4, a veces solo la clase) y no siempre coinciden.
         for a in soup.select(
             "h1 a[href], h2 a[href], h3 a[href], h4 a[href], "
-            "article h1 a[href], article h2 a[href], article h3 a[href], article h4 a[href], "
-            ".tribe-events-calendar-list__event-title a[href], .tribe-event-title a[href]"
+            "article a[href], "
+            ".tribe-events-calendar-list__event-title a[href], .tribe-event-title a[href], "
+            ".tribe-events-calendar-list__event-title a[href]"
         ):
             href = urljoin(url, a.get("href", ""))
             txt = clean_text(a.get_text(" ", strip=True), 160)
@@ -922,14 +935,13 @@ def compact_event_line(ev: Event) -> str:
 def render_cinema_group(group: list[Event]) -> str:
     first = sorted(group, key=lambda e: (e.start, e.time))[0]
     if getattr(first, "cinema_info_only", False):
-        block = f"• 🎬 <b>{html.escape(first.title)}</b>"
+        block = f"• <b>{html.escape(first.title)}</b>"
         target = first.ticket_url or first.url
         if target:
             block += f'\n    <a href="{html.escape(target, quote=True)}">🔗 Entradas / info</a>'
         return block
 
-    icon = first.tags[0] if first.tags else "🎬"
-    block = f"• {icon} <b>{html.escape(first.title)}</b>"
+    block = f"• <b>{html.escape(first.title)}</b>"
     times = []
     for ev in group:
         times.extend(ev.session_times or ([ev.time] if ev.time else []))
@@ -965,7 +977,7 @@ def render_event_group(group: list[Event]) -> str:
     if genre == "Cine":
         return render_cinema_group(group)
 
-    block = f"• {genre_icon(genre)} <b>{title}</b>\n" + "\n".join(sessions)
+    block = f"• <b>{title}</b>\n" + "\n".join(sessions)
 
     # Para el resto añadimos una descripción breve cuando existe.
     if genre != "Cine":
@@ -975,7 +987,7 @@ def render_event_group(group: list[Event]) -> str:
                 desc = ev.description.strip()
         if desc:
             desc = clean_text(desc, 280)
-            block += f"\n    {genre_icon(genre)} {html.escape(desc)}"
+            block += f"\n    {html.escape(desc)}"
 
     target = ""
     for ev in group:
