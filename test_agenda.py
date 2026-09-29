@@ -77,8 +77,7 @@ def test_cinema_group_uses_single_title_and_all_sessions():
     b.tags = ["💥"]
     text = agenda.render_event_group([a, b])
     assert text.count("Coyote vs Acme") == 1
-    assert "17:30, 18:00, 20:45" in text
-    assert "19:00" in text
+    assert "17:30, 18:00, 19:00, 20:45" in text
     assert "🔗 Entradas / info" in text
 
 
@@ -93,3 +92,31 @@ def test_venue_order_is_fixed():
 def test_theater_scraper_only_accepts_real_event_links():
     assert "/events/" in "https://www.teatromarialuisa.org/events/yo-literal-ernesto-sevilla/"
     assert "/events/categories/monologo-humor/" not in "https://www.teatromarialuisa.org/events/yo-literal-ernesto-sevilla/"
+
+
+def test_next_friday_when_run_on_tuesday():
+    assert agenda.next_friday(date(2026, 9, 29)) == date(2026, 10, 2)
+
+def test_friday_on_friday_is_same_day():
+    assert agenda.next_friday(date(2026, 10, 2)) == date(2026, 10, 2)
+
+def test_cinema_renderer_does_not_invent_spectator_price():
+    e = agenda.make_event("Coyote vs Acme", date(2026, 10, 2), date(2026, 10, 2), "17:00",
+                          "Cines Victoria", "Acción", "https://cine.example/movie", "Cines Victoria", category="Cine")
+    e.genre = "Cine"
+    e.session_times = ["17:00"]
+    e.tags = ["💥"]
+    e.cinema_spectator_day = "miércoles"
+    text = agenda.render_cinema_group([e])
+    assert "vie 02/10 · 17:00" in text
+    assert "miércoles · precio no publicado en la web" in text
+    assert "01 €" not in text
+
+def test_palcongrex_venue_is_not_used_as_city():
+    e = agenda.make_event("Ángel Martín: Somos Monos", date(2026, 10, 3), date(2026, 10, 3),
+                          "", "Palacio de Congresos", "", "https://example.com",
+                          "Palcongrex", city="Mérida", category="Espectáculos")
+    if not e.genre:
+        e.genre = "Teatro"
+    assert agenda.is_valid_cartelera_event(e)
+    assert agenda.canonical_venue(e.location, e.organizer) == "Palacio de Congresos"

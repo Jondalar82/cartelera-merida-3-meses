@@ -63,7 +63,7 @@ El bot mantiene un máximo de 4 mensajes por ejecución.
    - `TELEGRAM_BOT_TOKEN`
    - `TELEGRAM_CHAT_ID` o `TELEGRAM_CHAT_IDS`
 4. Ejecutar Actions → `Cartelera Mérida 3 meses → Telegram`.
-5. El workflow vuelve a ejecutarse automáticamente cada día.
+5. El workflow se ejecuta automáticamente una vez por semana, los viernes.
 
 ## Pruebas
 
@@ -90,6 +90,21 @@ La salida se organiza estrictamente por recinto y, dentro de cada recinto, por t
 6. 🎬 Cineclub Fórum
 7. 📍 Otros recintos
 
-Las sesiones del mismo título se agrupan bajo una única entrada y se ordenan cronológicamente. En cine se muestra de forma compacta título + sesiones + enlace. En teatro, musicales, monólogos, conciertos y danza se añade una descripción breve cuando la fuente la proporciona.
+Las sesiones del mismo título se agrupan bajo una única entrada. En Cines Victoria, al ejecutarse los viernes, se muestran únicamente las sesiones del viernes de la cartelera recién publicada; el enlace de cada película apunta a su ficha de película para consultar horarios posteriores. El cine no inventa precios: solo muestra como tarifa lo que la web publique explícitamente y separa las promociones de la tarifa general. En teatro, musicales, monólogos, conciertos y danza se añade una descripción breve cuando la fuente la proporciona.
 
 Los enlaces priorizan la venta/taquilla detectada en la ficha oficial y, como respaldo, el enlace oficial del recinto. El envío mantiene un máximo de 4 mensajes por ejecución y puede cortar un recinto entre mensajes cuando sea necesario, sin alterar el orden de la cartelera.
+
+
+## Cines Victoria
+
+- Ejecución automática: viernes.
+- Se muestran las sesiones del viernes de cada película.
+- Una película aparece una sola vez.
+- El enlace de cada película prioriza su ficha `/pelicula/.../`, para que al pulsarlo posteriormente se puedan consultar los horarios que vaya publicando el cine.
+- El Día del Espectador se identifica por el día publicado por Cines Victoria.
+- Nunca se interpreta un número cercano al texto "Día del espectador" como precio: el importe solo se acepta si aparece explícitamente asociado a `€`.
+- Las promociones, como `Ticket Descuento`, se muestran aparte y no se presentan como precio general.
+
+## Protección contra pérdida de eventos
+
+Palcongrex se consulta mediante su agenda específica de Mérida y no mediante la tabla general de Extremadura. Teatro María Luisa recorre las páginas de programación para no quedarse únicamente con los primeros eventos visibles en portada.
