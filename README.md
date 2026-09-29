@@ -77,3 +77,11 @@ python -m pytest -q
 La cartelera comercial cambia con mucha más rapidez que la programación
 teatral. Por eso Cines Victoria se consulta en cada ejecución y solo se
 incluyen sesiones/fechas que la web publica realmente en ese momento.
+
+## Correcciones de esta versión
+
+- Corregida la definición de `_MERIDA_NAV_TEXT_BLACKLIST` y `_MERIDA_NAV_PATH_BLACKLIST`, evitando el fallo del scraper del Ayuntamiento.
+- Ventana dinámica: desde la fecha de ejecución hasta la misma fecha de dentro de 3 meses.
+- Workflow manual mediante `workflow_dispatch`.
+- Máximo 4 mensajes de Telegram por ejecución.
+- `TELEGRAM_CHAT_ID` debe ser el ID real del grupo/canal donde está el bot.
