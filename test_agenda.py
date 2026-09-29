@@ -109,7 +109,8 @@ def test_cinema_renderer_does_not_invent_spectator_price():
     e.cinema_spectator_day = "miércoles"
     text = agenda.render_cinema_group([e])
     assert "vie 02/10 · 17:00" in text
-    assert "miércoles · precio no publicado en la web" in text
+    assert "General:" not in text
+    assert "miércoles · precio no publicado en la web" not in text
     assert "01 €" not in text
 
 def test_palcongrex_venue_is_not_used_as_city():
@@ -120,3 +121,24 @@ def test_palcongrex_venue_is_not_used_as_city():
         e.genre = "Teatro"
     assert agenda.is_valid_cartelera_event(e)
     assert agenda.canonical_venue(e.location, e.organizer) == "Palacio de Congresos"
+
+
+def test_cinema_venue_renderer_puts_general_info_once():
+    e = agenda.make_event("Coyote vs Acme", date(2026, 10, 2), date(2026, 10, 2), "17:00",
+                          "Cines Victoria", "", "https://cine.example/movie", "Cines Victoria", category="Cine")
+    e.genre = "Cine"
+    e.session_times = ["17:00"]
+    e.tags = ["🎬"]
+    e.cinema_spectator_day = "miércoles"
+    e.cinema_promotion = "6,90 €"
+    msg = agenda.render_venue_block("Cines Victoria", [[e]])
+    assert msg.count("General: precio no publicado en la web") == 1
+    assert msg.count("Día del espectador: miércoles") == 1
+    assert msg.count("Promoción publicada: 6,90 €") == 1
+    assert "Coyote vs Acme" in msg
+
+
+def test_sala_trajano_has_own_venue():
+    assert agenda.canonical_venue("Sala Trajano") == "Sala Trajano"
+    assert agenda.venue_sort_key("Teatro Romano") < agenda.venue_sort_key("Sala Trajano")
+    assert agenda.venue_sort_key("Sala Trajano") < agenda.venue_sort_key("Centro Cultural Alcazaba")

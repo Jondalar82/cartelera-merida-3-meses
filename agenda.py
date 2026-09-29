@@ -54,6 +54,7 @@ VENUE_ALIASES = {
     "palacio de congresos": "Palacio de Congresos",
     "teatro romano": "Teatro Romano",
     "centro cultural alcazaba": "Centro Cultural Alcazaba",
+    "sala trajano": "Sala Trajano",
     "cines victoria": "Cines Victoria",
     "cine victoria": "Cines Victoria",
     "acueducto de los milagros": "Acueducto de los Milagros",
@@ -67,9 +68,10 @@ VENUE_ORDER = {
     "Palacio de Congresos": 1,
     "Teatro María Luisa": 2,
     "Teatro Romano": 3,
-    "Centro Cultural Alcazaba": 4,
-    "Cineclub Fórum": 5,
-    "Otros recintos": 6,
+    "Sala Trajano": 4,
+    "Centro Cultural Alcazaba": 5,
+    "Cineclub Fórum": 6,
+    "Otros recintos": 7,
 }
 VENUE_TICKET_LINKS = {
     "Cines Victoria": "https://www.cinesvictoria.com/cine/M%C3%A9rida/",
@@ -78,6 +80,7 @@ VENUE_TICKET_LINKS = {
     "Teatro Romano": "https://www.consorciomerida.org/",
     "Centro Cultural Alcazaba": "https://merida.es/",
     "Cineclub Fórum": "https://festivalcinemerida.com/cineclub/",
+    "Sala Trajano": "https://merida.es/agenda/",
 }
 
 @dataclass
@@ -103,6 +106,7 @@ class Event:
     cinema_spectator_day: str = "miércoles"
     cinema_promotion: str = ""
     cinema_movie_url: str = ""
+    cinema_info_only: bool = False
 
     def key(self) -> str:
         raw = f"{norm(self.title)}|{self.start.isoformat()}|{norm(canonical_venue(self.location, self.organizer))}"
@@ -510,6 +514,12 @@ def classify_event(ev: Event) -> None:
         ev.genre = ""
         return
 
+    # Palcongrex usa "Espectáculos" como categoría paraguas. Debe sobrevivir
+    # también a la segunda clasificación que hace dedupe().
+    if norm(ev.source) == "palcongrex" and "espectáculos" in title_cat:
+        ev.genre = "Teatro"
+        return
+
     # Orden específico para que "musical basado en una película" NO sea cine.
     if any(k in title_cat for k in GENRE_PATTERNS["Musical"]):
         ev.genre = "Musical"
@@ -691,6 +701,14 @@ def scrape_cines_victoria() -> list[Event]:
     # Información general de la sede. No confundimos promociones con tarifa general.
     page_text = clean_text(soup.get_text(" ", strip=True), 30000)
     promotion = _extract_price(page_text, [r"TICKET DESCUENTO\s+Entrada\s*([0-9]+(?:[,.][0-9]{1,2})?)\s*€"])
+    general_price = _extract_price(page_text, [
+        r"(?:entrada\s+general|general)[^€]{0,50}([0-9]+(?:[,.][0-9]{1,2})?)\s*€",
+        r"([0-9]+(?:[,.][0-9]{1,2})?)\s*€[^\n]{0,30}(?:entrada\s+general|general)"
+    ])
+    spectator_price = _extract_price(page_text, [
+        r"(?:día\s+del\s+espectador)[^€]{0,80}([0-9]+(?:[,.][0-9]{1,2})?)\s*€",
+        r"([0-9]+(?:[,.][0-9]{1,2})?)\s*€[^\n]{0,50}(?:día\s+del\s+espectador)"
+    ])
     spectator_day = "miércoles" if re.search(r"Día del espectador", page_text, re.I) else ""
 
     headings = soup.select("h2, h3, h4")
@@ -765,13 +783,33 @@ def scrape_cines_victoria() -> list[Event]:
                         "Cines Victoria", category="Cine", city="Mérida")
         ev.genre = "Cine"
         ev.session_times = friday_times
-        ev.cinema_general_price = ""
-        ev.cinema_spectator_price = ""
+        ev.cinema_general_price = general_price
+        ev.cinema_spectator_price = spectator_price
         ev.cinema_spectator_day = spectator_day or "miércoles"
         ev.cinema_promotion = promotion
         ev.cinema_movie_url = movie_url
         ev.tags.append(icon)
         ev.ticket_url = ticket_url
+        events.append(ev)
+
+    cycle_seen = set()
+    for a in soup.select("a[href]"):
+        href = urljoin(url, a.get("href", ""))
+        title = clean_text(a.get_text(" ", strip=True), 180)
+        low = norm(title)
+        if "ciclo" not in low or not href or href in cycle_seen:
+            continue
+        if "compraentradas.com" not in href and "/cine/" not in href:
+            continue
+        cycle_seen.add(href)
+        ev = make_event(title, FRIDAY_DATE, FRIDAY_DATE, "", "Cines Victoria", "", href,
+                        "Cines Victoria", category="Cine", city="Mérida")
+        ev.genre = "Cine"
+        ev.cinema_info_only = True
+        ev.ticket_url = href
+        ev.cinema_movie_url = ""
+        ev.session_times = []
+        ev.tags = ["🎬"]
         events.append(ev)
     return events
 
@@ -795,7 +833,7 @@ def scrape_cineclub_merida() -> list[Event]:
         title = clean_text(a.get_text(" ", strip=True), 180) if a else ""
         if not title or len(title) < 3:
             continue
-        ev = make_event(title, st, en, extract_time(txt), "Cines Victoria",
+        ev = make_event(title, st, en, extract_time(txt), "Cineclub Fórum",
                         txt, urljoin(url, a.get("href")) if a else url,
                         "Cine Club Fórum", category="Cine", city="Mérida")
         ev.genre = "Cine"
@@ -917,6 +955,7 @@ def venue_icon(venue: str) -> str:
         "Teatro Romano": "🏛️",
         "Centro Cultural Alcazaba": "📍",
         "Cineclub Fórum": "🎬",
+        "Sala Trajano": "🎭",
     }.get(venue, "📍")
 
 
@@ -942,30 +981,21 @@ def compact_event_line(ev: Event) -> str:
 
 def render_cinema_group(group: list[Event]) -> str:
     first = sorted(group, key=lambda e: (e.start, e.time))[0]
+    if getattr(first, "cinema_info_only", False):
+        block = f"• 🎬 <b>{html.escape(first.title)}</b>"
+        target = first.ticket_url or first.url
+        if target:
+            block += f'\n    <a href="{html.escape(target, quote=True)}">🔗 Entradas / info</a>'
+        return block
+
     icon = first.tags[0] if first.tags else "🎬"
     block = f"• {icon} <b>{html.escape(first.title)}</b>"
-    # Solo el viernes: todas las sesiones del día en una única línea.
     times = []
     for ev in group:
         times.extend(ev.session_times or ([ev.time] if ev.time else []))
     times = sorted(set(times), key=lambda x: (int(x[:2]), int(x[3:])))
     if times:
         block += f"\n    {fmt_date_es(FRIDAY_DATE)} · " + ", ".join(html.escape(t) for t in times)
-
-    general = next((e.cinema_general_price for e in group if e.cinema_general_price), "")
-    spectator = next((e.cinema_spectator_price for e in group if e.cinema_spectator_price), "")
-    spectator_day = next((e.cinema_spectator_day for e in group if e.cinema_spectator_day), "miércoles")
-    promotion = next((e.cinema_promotion for e in group if e.cinema_promotion), "")
-    if general:
-        block += f"\n    💶 General: {html.escape(general)}"
-    else:
-        block += "\n    💶 General: precio no publicado en la web"
-    if spectator:
-        block += f" · 🟢 Día del espectador: {html.escape(spectator_day)} · {html.escape(spectator)}"
-    else:
-        block += f" · 🟢 Día del espectador: {html.escape(spectator_day)} · precio no publicado en la web"
-    if promotion:
-        block += f"\n    🎟️ Promoción publicada: {html.escape(promotion)}"
 
     movie_url = next((e.cinema_movie_url for e in group if e.cinema_movie_url), "")
     target = movie_url or next((e.ticket_url for e in group if e.ticket_url), "") or VENUE_TICKET_LINKS.get("Cines Victoria", "")
@@ -1023,9 +1053,22 @@ def render_venue_block(venue: str, groups: list[list[Event]]) -> str:
     target = VENUE_TICKET_LINKS.get(venue, "")
     link = f' <a href="{html.escape(target, quote=True)}">Entradas / info</a>' if target else ""
     header = f"{venue_icon(venue)} <b>{html.escape(venue)}</b>{link}"
+
+    if venue == "Cines Victoria":
+        general = next((e.cinema_general_price for g in groups for e in g if e.cinema_general_price), "")
+        spectator_day = next((e.cinema_spectator_day for g in groups for e in g if e.cinema_spectator_day), "miércoles")
+        spectator = next((e.cinema_spectator_price for g in groups for e in g if e.cinema_spectator_price), "")
+        promotion = next((e.cinema_promotion for g in groups for e in g if e.cinema_promotion), "")
+        info = f"💶 General: {html.escape(general) if general else 'precio no publicado en la web'}"
+        info += f" · 🟢 Día del espectador: {html.escape(spectator_day) if spectator_day else 'no publicado'} · "
+        info += f"{html.escape(spectator) if spectator else 'precio no publicado en la web'}"
+        if promotion:
+            info += f"\n    🎟️ Promoción publicada: {html.escape(promotion)}"
+        body = "\n\n".join(render_event_group(g) for g in groups)
+        return header + "\n" + info + "\n\n" + body
+
     body = "\n\n".join(render_event_group(g) for g in groups)
     return header + "\n" + body
-
 
 def build_venue_blocks(events: list[Event]) -> list[str]:
     venues = {}
