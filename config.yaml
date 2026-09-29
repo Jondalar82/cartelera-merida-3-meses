@@ -8,6 +8,8 @@ meses_ventana: 3
 # Máximo operativo de Telegram por ejecución.
 max_mensajes_totales: 4
 
+# La ejecución automática se programa semanalmente los viernes mediante GitHub Actions.
+
 # Margen respecto al límite real de Telegram.
 max_chars: 3800
 

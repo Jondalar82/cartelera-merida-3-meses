@@ -63,3 +63,33 @@ def test_message_contains_required_fields():
     assert "Concierto" in msg
     assert "Palacio de Congresos" in msg
     assert "Entradas / info" in msg
+
+def test_cinema_group_uses_single_title_and_all_sessions():
+    a = agenda.make_event("Coyote vs Acme", agenda.TODAY, agenda.TODAY, "17:30",
+                          "Cines Victoria", "Acción", "https://cine.example/movie", "Cines Victoria", category="Cine")
+    a.genre = "Cine"
+    a.session_times = ["17:30", "18:00", "20:45"]
+    a.tags = ["💥"]
+    b = agenda.make_event("Coyote vs Acme", agenda.TODAY + timedelta(days=1), agenda.TODAY + timedelta(days=1), "19:00",
+                          "Cines Victoria", "Acción", "https://cine.example/movie", "Cines Victoria", category="Cine")
+    b.genre = "Cine"
+    b.session_times = ["19:00"]
+    b.tags = ["💥"]
+    text = agenda.render_event_group([a, b])
+    assert text.count("Coyote vs Acme") == 1
+    assert "17:30, 18:00, 20:45" in text
+    assert "19:00" in text
+    assert "🔗 Entradas / info" in text
+
+
+def test_venue_order_is_fixed():
+    assert agenda.venue_sort_key("Cines Victoria") < agenda.venue_sort_key("Palacio de Congresos")
+    assert agenda.venue_sort_key("Palacio de Congresos") < agenda.venue_sort_key("Teatro María Luisa")
+    assert agenda.venue_sort_key("Teatro María Luisa") < agenda.venue_sort_key("Teatro Romano")
+    assert agenda.venue_sort_key("Teatro Romano") < agenda.venue_sort_key("Centro Cultural Alcazaba")
+    assert agenda.venue_sort_key("Centro Cultural Alcazaba") < agenda.venue_sort_key("Cineclub Fórum")
+
+
+def test_theater_scraper_only_accepts_real_event_links():
+    assert "/events/" in "https://www.teatromarialuisa.org/events/yo-literal-ernesto-sevilla/"
+    assert "/events/categories/monologo-humor/" not in "https://www.teatromarialuisa.org/events/yo-literal-ernesto-sevilla/"

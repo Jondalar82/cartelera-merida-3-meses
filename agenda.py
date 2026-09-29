@@ -97,6 +97,10 @@ class Event:
     genre: str = ""
     score: int = 0
     tags: list[str] = field(default_factory=list)
+    session_times: list[str] = field(default_factory=list)
+    cinema_general_price: str = ""
+    cinema_spectator_price: str = ""
+    cinema_spectator_day: str = "miércoles"
 
     def key(self) -> str:
         raw = f"{norm(self.title)}|{self.start.isoformat()}|{norm(canonical_venue(self.location, self.organizer))}"
@@ -522,126 +526,196 @@ def dedupe(events: list[Event]) -> list[Event]:
     return list(result.values())
 
 def scrape_teatro_maria_luisa() -> list[Event]:
-    """Programa oficial del Teatro María Luisa."""
-    url = "https://www.teatromarialuisa.org/"
-    soup = fetch(url)
+    """Programa oficial: toma únicamente fichas reales /events/ y no enlaces de categorías."""
+    base = "https://www.teatromarialuisa.org/"
+    soup = fetch(base)
     if not soup:
         return []
     events = []
-    # El sitio presenta cada espectáculo como tarjeta; buscamos enlaces/títulos
-    # y usamos el bloque ascendente como contexto de fecha/hora.
-    for a in soup.select("a[href]"):
+    seen = set()
+    links = []
+    for a in soup.select('a[href*="/events/"]'):
+        href = urljoin(base, a.get("href", ""))
         title = clean_text(a.get_text(" ", strip=True), 180)
-        href = urljoin(url, a.get("href", ""))
-        if len(title) < 4:
+        if not href or href in seen or len(title) < 4:
             continue
-        block = a
-        txt = ""
-        for _ in range(5):
-            block = block.parent
-            if block is None:
-                break
-            txt = clean_text(block.get_text(" ", strip=True), 900)
-            if re.search(r"\b\d{1,2}\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\s+de\s+\d{4}", txt, re.I):
-                break
-        st, en = parse_date(txt)
-        if not st:
+        seen.add(href)
+        links.append((href, title))
+
+    for href, fallback_title in links:
+        detail = fetch(href)
+        if not detail:
             continue
-        # Solo Mérida y solo dentro de la ventana.
-        if st < TODAY or st > END_DATE:
+        title_node = detail.select_one("h1")
+        title = clean_text(title_node.get_text(" ", strip=True), 180) if title_node else fallback_title
+        page_text = clean_text(detail.get_text(" ", strip=True), 9000)
+        st, en = parse_date(page_text)
+        if not st or not (TODAY <= st <= END_DATE):
             continue
+        tm = extract_time(page_text)
+        # Categoría real de la ficha, no la etiqueta genérica del listado.
         category = ""
-        for g in GENRE_LABELS:
-            if g.lower() in norm(txt):
-                category = g
+        for a in detail.select('a[href*="/events/categories/"]'):
+            txt = clean_text(a.get_text(" ", strip=True), 80)
+            if txt:
+                category = txt
                 break
-        ev = make_event(title, st, en, extract_time(txt), "Teatro María Luisa",
-                        txt, href, "Teatro María Luisa", category=category, city="Mérida")
+        if not category:
+            category = clean_text(fallback_title, 80)
+
+        # Descripción: priorizamos párrafos sustantivos y evitamos navegación/compra.
+        paragraphs = []
+        for node in detail.select("main p, article p, .entry-content p, .elementor-widget-text-editor p"):
+            txt = clean_text(node.get_text(" ", strip=True), 700)
+            low = norm(txt)
+            if len(txt) >= 45 and not any(x in low for x in ["comprar entradas", "taquilla y descuentos", "más información"]):
+                paragraphs.append(txt)
+        desc = " ".join(paragraphs[:2])
+        if not desc:
+            desc = page_text
+        ev = make_event(title, st, en, tm, "Teatro María Luisa", desc, href,
+                        "Teatro María Luisa", category=category, city="Mérida")
+        # Las fichas pueden usar etiquetas como "Comedia", "Música" o "Humor";
+        # las convertimos a uno de nuestros géneros permitidos mediante el título/categoría.
+        if not ev.genre:
+            cat = norm(category + " " + title)
+            if any(k in cat for k in ["monólogo", "monologo", "humor"]):
+                ev.genre = "Monólogo"
+            elif any(k in cat for k in ["música", "musica", "concierto", "piano"]):
+                ev.genre = "Concierto"
+            elif "danza" in cat or "flamenco" in cat:
+                ev.genre = "Danza"
+            elif "musical" in cat:
+                ev.genre = "Musical"
+            elif "teatro" in cat or "comedia" in cat or "drama" in cat:
+                ev.genre = "Teatro"
+            elif "cine" in cat:
+                ev.genre = "Cine"
         if ev.genre:
+            ev.session_times = [tm] if tm else []
             events.append(ev)
     return events
 
+
+def _extract_price(text: str, patterns: list[str]) -> str:
+    for pat in patterns:
+        m = re.search(pat, text, re.I)
+        if m:
+            return m.group(1).replace(".", ",") + " €"
+    return ""
+
+def _cinema_icon(text: str) -> str:
+    t = norm(text)
+    if any(k in t for k in ["terror", "horror", "miedo"]):
+        return "👻"
+    if any(k in t for k in ["acción", "accion", "aventura"]):
+        return "💥"
+    if any(k in t for k in ["animación", "animacion", "familiar"]):
+        return "👨‍👩‍👧‍👦"
+    if any(k in t for k in ["comedia", "humor"]):
+        return "😂"
+    if any(k in t for k in ["ciencia ficción", "ciencia ficcion", "sci-fi"]):
+        return "🚀"
+    if any(k in t for k in ["thriller", "suspense"]):
+        return "🔪"
+    if any(k in t for k in ["romance", "romántica", "romantica"]):
+        return "❤️"
+    if any(k in t for k in ["drama"]):
+        return "🎭"
+    return "🎬"
+
 def scrape_cines_victoria() -> list[Event]:
-    """Cartelera oficial de Cines Victoria Mérida.
-    La web cambia las sesiones diariamente, por lo que el scraper solo incorpora
-    fechas realmente visibles en la página. Incluye estrenos comerciales y ciclos
-    identificables como VOSE/cine de autor."""
+    """Cartelera oficial de Cines Victoria Mérida. Agrupa todos los pases por película/día."""
     url = "https://www.cinesvictoria.com/cine/M%C3%A9rida/"
     soup = fetch(url)
     if not soup:
         return []
     events = []
-    # Detectamos títulos de películas en encabezados y su bloque de horarios.
+    weekday_pat = re.compile(r"\b(lunes|martes|miércoles|jueves|viernes|sábado|domingo)\s+(\d{1,2})\b", re.I)
+    months = {"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
+              "julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12}
+
     for heading in soup.select("h2, h3, h4"):
         title = clean_text(heading.get_text(" ", strip=True), 160)
-        if not title or title.lower() in {"cartelera y horarios de compra online", "cartelera y horarios"}:
+        low_title = norm(title)
+        if not title or low_title in {"cartelera y horarios de compra online", "cartelera y horarios", "venta anticipada", "en cartelera"}:
             continue
         block = heading
         txt = ""
-        for _ in range(3):
+        for _ in range(4):
             block = block.parent
             if block is None:
                 break
-            txt = clean_text(block.get_text(" ", strip=True), 1400)
-            if re.search(r"\b(lunes|martes|miércoles|jueves|viernes|sábado|domingo)\b", txt, re.I):
+            txt = clean_text(block.get_text(" ", strip=True), 2200)
+            if weekday_pat.search(txt):
                 break
-        # En cartelera normal la página suele mostrar días sin año; usamos
-        # el año actual y solo retenemos días que no queden fuera de la ventana.
-        weekday_pat = re.compile(
-            r"\b(lunes|martes|miércoles|jueves|viernes|sábado|domingo)\s+(\d{1,2})\b", re.I
-        )
         matches = list(weekday_pat.finditer(txt))
         if not matches:
             continue
-        cycle = any(k in norm(txt) for k in ["vose", "v.o.s.e", "cine club", "cineclub", "ciclo de cine"])
-        # Un mismo título puede tener varias sesiones; agrupamos por fecha y
-        # conservamos todas las horas visibles.
+
+        # Enlace específico de compra de ESTA película.
+        ticket_url = ""
+        for a in block.select('a[href]'):
+            at = norm(a.get_text(" ", strip=True))
+            if "comprar entradas" in at and "merida" in at:
+                ticket_url = urljoin(url, a.get("href", ""))
+                break
+        if not ticket_url:
+            for a in block.select('a[href]'):
+                at = norm(a.get_text(" ", strip=True))
+                if "comprar entradas" in at:
+                    ticket_url = urljoin(url, a.get("href", ""))
+                    break
+
+        # Precios que el sitio publique en el bloque.
+        general = _extract_price(txt, [r"entrada general\s*([0-9]+(?:[,.][0-9]{1,2})?)",
+                                       r"precio general\s*([0-9]+(?:[,.][0-9]{1,2})?)"])
+        spectator = _extract_price(txt, [r"día del espectador[^0-9]{0,30}([0-9]+(?:[,.][0-9]{1,2})?)",
+                                         r"dia del espectador[^0-9]{0,30}([0-9]+(?:[,.][0-9]{1,2})?)"])
+        if not general:
+            # La promoción visible de 6,90 € NO se etiqueta como precio general:
+            # se conserva aparte para no presentar una promoción como tarifa normal.
+            pass
+
         by_date = {}
         for m in matches:
             day = int(m.group(2))
-            # Inferimos mes buscando primero el mes explícito en el bloque.
-            month_m = re.search(
-                r"\b(\d{1,2})\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b",
-                txt, re.I
-            )
-            month = {"enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
-                     "julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12}
-            if month_m:
-                mon = month[month_m.group(2).lower()]
-            else:
-                mon = TODAY.month
+            month_m = re.search(r"\b(\d{1,2})\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b", txt, re.I)
+            mon = months[month_m.group(2).lower()] if month_m else TODAY.month
             try:
                 d = date(TODAY.year, mon, day)
-            except ValueError:
-                continue
-            if d < TODAY:
-                # Una página de cartelera que cruza de mes suele contener el
-                # siguiente mes; prueba el mes siguiente.
-                try:
+                if d < TODAY:
                     d2 = date(TODAY.year + (1 if mon == 12 else 0), 1 if mon == 12 else mon + 1, day)
                     if d2 >= TODAY:
                         d = d2
-                except ValueError:
-                    continue
-            if TODAY <= d <= END_DATE:
-                by_date.setdefault(d, []).append(m.start())
-        for d in by_date:
-            # La hora puede aparecer varias veces; no es necesario replicar cada
-            # pase como evento independiente para una cartelera mensual.
-            times = re.findall(r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b", txt)
-            desc = "Ciclo de cine VOSE / cineclub" if cycle else "Cartelera comercial"
+            except ValueError:
+                continue
+            if not (TODAY <= d <= END_DATE):
+                continue
+            # Horarios entre este día y el siguiente día visible.
+            start_pos = m.end()
+            next_pos = matches[matches.index(m)+1].start() if m != matches[-1] else len(txt)
+            segment = txt[start_pos:next_pos]
+            times = sorted(set(re.findall(r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b", segment)), key=lambda x: (int(x[:2]), int(x[3:])))
+            # Si el bloque no delimita bien, usa todos los horarios como respaldo.
+            if not times:
+                times = sorted(set(re.findall(r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b", txt)))
+            by_date[d] = times
+
+        category_text = txt
+        icon = _cinema_icon(category_text)
+        for d, times in by_date.items():
             ev = make_event(title, d, d, times[0] if times else "",
-                            "Cines Victoria", desc, url, "Cines Victoria",
+                            "Cines Victoria", category_text, ticket_url or url, "Cines Victoria",
                             category="Cine", city="Mérida")
             ev.genre = "Cine"
+            ev.session_times = times
+            ev.cinema_general_price = general
+            ev.cinema_spectator_price = spectator
+            ev.tags.append(icon)
             events.append(ev)
-    # El ciclo VOSE también aparece como bloque independiente con fechas de rango.
-    text = clean_text(soup.get_text(" ", strip=True), 8000)
-    if "40º ciclo de cine" in norm(text) or "40º ciclo" in norm(text):
-        # No inventamos títulos futuros: los títulos individuales se obtienen de
-        # las tarjetas anteriores.
-        pass
     return events
+
 
 def scrape_cineclub_merida() -> list[Event]:
     """Fuente complementaria del Cine Club Fórum. Se usa como fuente de
@@ -803,9 +877,39 @@ def compact_event_line(ev: Event) -> str:
         when += f" · {html.escape(ev.time)}"
     target = ev.ticket_url or ev.url or VENUE_TICKET_LINKS.get(venue, "")
     link = f' <a href="{html.escape(target, quote=True)}">🎟️ Entradas / info</a>' if target else ""
-    return (f"• <b>{html.escape(ev.title)}</b> · {when}\n"
-            f"  {genre_icon(ev.genre)} {html.escape(ev.genre)} · 📍 {html.escape(venue)}{link}")
+    return (f"• {genre_icon(ev.genre)} <b>{html.escape(ev.title)}</b> · {when}\n"
+            f"  {html.escape(ev.genre)} · 📍 {html.escape(venue)}{link}")
 
+
+def render_cinema_group(group: list[Event]) -> str:
+    first = sorted(group, key=lambda e: (e.start, e.time))[0]
+    icon = first.tags[0] if first.tags else "🎬"
+    block = f"• {icon} <b>{html.escape(first.title)}</b>"
+    seen_dates = set()
+    for ev in sorted(group, key=lambda e: (e.start, e.time)):
+        if ev.start in seen_dates:
+            continue
+        seen_dates.add(ev.start)
+        times = ev.session_times or ([ev.time] if ev.time else [])
+        times = list(dict.fromkeys(times))
+        when = fmt_date_es(ev.start)
+        if times:
+            when += " · " + ", ".join(html.escape(t) for t in times)
+        block += f"\n    {when}"
+    general = next((e.cinema_general_price for e in group if e.cinema_general_price), "")
+    spectator = next((e.cinema_spectator_price for e in group if e.cinema_spectator_price), "")
+    if general:
+        block += f"\n    💶 General: {html.escape(general)}"
+    else:
+        block += "\n    💶 General: precio no publicado en la web"
+    if spectator:
+        block += f" · 🟢 Día del espectador: {html.escape(spectator)}"
+    else:
+        block += "\n    🟢 Día del espectador: miércoles · precio no publicado en la web"
+    target = next((e.ticket_url or e.url for e in group if e.ticket_url or e.url), VENUE_TICKET_LINKS.get("Cines Victoria", ""))
+    if target:
+        block += f'\n    <a href="{html.escape(target, quote=True)}">🔗 Entradas / info</a>'
+    return block
 
 def render_event_group(group: list[Event]) -> str:
     """Renderiza un título/producción una sola vez y agrupa todas sus sesiones."""
@@ -825,9 +929,11 @@ def render_event_group(group: list[Event]) -> str:
             when += f" · {html.escape(ev.time)}"
         sessions.append(f"    {when}")
 
-    block = f"• <b>{title}</b>\n" + "\n".join(sessions)
+    if genre == "Cine":
+        return render_cinema_group(group)
 
-    # El cine se mantiene limpio: título + todas las sesiones + enlace.
+    block = f"• {genre_icon(genre)} <b>{title}</b>\n" + "\n".join(sessions)
+
     # Para el resto añadimos una descripción breve cuando existe.
     if genre != "Cine":
         desc = ""
