@@ -315,6 +315,7 @@ def scrape_merida_api(days: int = 90, max_pages: int = 6) -> list[Event]:
             break
         for item in page_events:
             title = clean_text(item.get("title", ""), 180)
+            title = re.sub(r"^(?:teatro|concierto|musical|danza|monólogo|monologo)\s*:\s*", "", title, flags=re.I)
             if not title or norm(title) in _MERIDA_NAV_TEXT_BLACKLIST:
                 continue
             sd_raw = (item.get("start_date") or "")[:10]
@@ -389,6 +390,7 @@ def scrape_merida(max_pages=8) -> list[Event]:
                 continue
             title = detail.select_one("h1")
             title_text = title.get_text(" ", strip=True) if title else ""
+            title_text = re.sub(r"^(?:teatro|concierto|musical|danza|monólogo|monologo)\s*:\s*", "", title_text, flags=re.I)
             if not title_text or norm(title_text) in _MERIDA_NAV_TEXT_BLACKLIST:
                 continue
             body = detail.select_one("main") or detail
@@ -449,6 +451,7 @@ def scrape_palcongrex() -> list[Event]:
 # FILTRO ESTRICTO DE CARTELERA
 # ---------------------------------------------------------------------------
 EXCLUDE_KW = [
+    "cancelado", "cancelada", "aplazado", "aplazada", "suspendido", "suspendida",
     "exposición", "exposicion", "conferencia", "congreso", "jornada",
     "taller", "curso", "formación", "formacion", "seminario",
     "mesa redonda", "presentación de libro", "presentacion de libro",
@@ -661,6 +664,9 @@ def scrape_cines_victoria() -> list[Event]:
         r"(?:día\s+del\s+espectador)[^€]{0,80}([0-9]+(?:[,.][0-9]{1,2})?)\s*€",
         r"([0-9]+(?:[,.][0-9]{1,2})?)\s*€[^\n]{0,50}(?:día\s+del\s+espectador)"
     ])
+    # No mostrar nunca una tarifa 0 € como si fuera un precio real.
+    if spectator_price and re.fullmatch(r"0+(?:[,.]0+)?\s*€?", spectator_price.strip()):
+        spectator_price = ""
     spectator_day = "miércoles" if re.search(r"Día del espectador", page_text, re.I) else ""
 
     headings = soup.select("h2, h3, h4")
@@ -748,6 +754,10 @@ def scrape_cines_victoria() -> list[Event]:
     for a in soup.select("a[href]"):
         href = urljoin(url, a.get("href", ""))
         title = clean_text(a.get_text(" ", strip=True), 180)
+        # El enlace del ciclo suele arrastrar texto de navegación. Lo limpiamos
+        # para que Telegram muestre un título corto y útil.
+        title = re.sub(r"\s+ver el ciclo(?:\s*[↓↘→])?$", "", title, flags=re.I)
+        title = re.sub(r"\s+\d{1,2}\s+(?:de\s+)?[a-záéíóú]+\s*[–-]\s*\d{1,2}\s+(?:de\s+)?[a-záéíóú]+(?:\s+\d{4})?$", "", title, flags=re.I)
         low = norm(title)
         if "ciclo" not in low or not href or href in cycle_seen:
             continue
@@ -911,6 +921,17 @@ def venue_icon(venue: str) -> str:
         "Sala Trajano": "🎭",
     }.get(venue, "📍")
 
+def venue_display_name(venue: str) -> str:
+    return {
+        "Cines Victoria": "Cines Victoria · Mérida",
+        "Palacio de Congresos": "Palacio de Congresos · Mérida",
+        "Teatro María Luisa": "Teatro María Luisa · Mérida",
+        "Teatro Romano": "Teatro Romano · Mérida",
+        "Sala Trajano": "Sala Trajano · Mérida",
+        "Centro Cultural Alcazaba": "Centro Cultural Alcazaba · Mérida",
+        "Cineclub Fórum": "Cineclub Fórum · Mérida",
+    }.get(venue, f"{venue} · Mérida")
+
 
 def venue_sort_key(venue: str):
     return (VENUE_ORDER.get(venue, 6), norm(venue))
@@ -1004,7 +1025,12 @@ def render_event_group(group: list[Event]) -> str:
 def render_venue_block(venue: str, groups: list[list[Event]]) -> str:
     target = VENUE_TICKET_LINKS.get(venue, "")
     link = f' <a href="{html.escape(target, quote=True)}">Entradas / info</a>' if target else ""
-    header = f"{venue_icon(venue)} <b>{html.escape(venue)}</b>{link}"
+    # Encabezado de recinto muy visible para que, incluso si Telegram corta
+    # un bloque entre mensajes, quede inequívoca la ubicación.
+    display = venue_display_name(venue)
+    header = (f"━━━━━━━━━━━━━━━━━━━━\n"
+              f"{venue_icon(venue)} <b>{html.escape(display)}</b>{link}\n"
+              f"━━━━━━━━━━━━━━━━━━━━")
 
     if venue == "Cines Victoria":
         general = next((e.cinema_general_price for g in groups for e in g if e.cinema_general_price), "")
@@ -1082,7 +1108,9 @@ def split_blocks_into_messages(blocks: list[str], max_chars: int, max_total: int
         skip_description = False
         for line in lines:
             stripped = line.strip()
-            if stripped.startswith(("🎭 ", "🎼 ", "🎤 ", "🎵 ", "💃 ")) and not stripped.startswith("🎭 <b>CARTELERA"):
+            # Solo eliminamos descripciones que empiezan con un icono y están
+            # indentadas. Nunca tocar los encabezados de recinto.
+            if line.startswith("    ") and stripped.startswith(("🎭 ", "🎼 ", "🎤 ", "🎵 ", "💃 ")):
                 skip_description = True
                 continue
             if skip_description and stripped.startswith("<a href="):
