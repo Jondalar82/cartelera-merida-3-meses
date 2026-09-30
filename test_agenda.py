@@ -61,7 +61,7 @@ def test_message_contains_required_fields():
     assert "Concierto X" in msg
     assert "20:00" in msg
     assert "Concierto" in msg
-    assert "Palacio de Congresos" in msg
+    assert "Palacio de Congresos" not in msg
     assert "Entradas / info" in msg
 
 def test_cinema_group_uses_single_title_and_all_sessions():
@@ -77,6 +77,7 @@ def test_cinema_group_uses_single_title_and_all_sessions():
     b.tags = ["💥"]
     text = agenda.render_event_group([a, b])
     assert text.count("Coyote vs Acme") == 1
+    assert "💥 Acción" in text
     assert "17:30, 18:00, 19:00, 20:45" in text
     assert "🔗 Entradas / info" in text
 
@@ -123,19 +124,17 @@ def test_palcongrex_venue_is_not_used_as_city():
     assert agenda.canonical_venue(e.location, e.organizer) == "Palacio de Congresos"
 
 
-def test_cinema_venue_renderer_puts_general_info_once():
+def test_cinema_venue_renderer_uses_compact_event_fields():
     e = agenda.make_event("Coyote vs Acme", date(2026, 10, 2), date(2026, 10, 2), "17:00",
                           "Cines Victoria", "", "https://cine.example/movie", "Cines Victoria", category="Cine")
     e.genre = "Cine"
     e.session_times = ["17:00"]
-    e.tags = ["🎬"]
-    e.cinema_spectator_day = "miércoles"
-    e.cinema_promotion = "6,90 €"
     msg = agenda.render_venue_block("Cines Victoria", [[e]])
-    assert msg.count("General: precio no publicado en la web") == 1
-    assert msg.count("Día del espectador: miércoles") == 1
-    assert msg.count("Promoción publicada: 6,90 €") == 1
     assert "Coyote vs Acme" in msg
+    assert "Cine" in msg
+    assert "General:" not in msg
+    assert "Día del espectador" not in msg
+    assert "6,90 €" not in msg
 
 
 def test_sala_trajano_has_own_venue():

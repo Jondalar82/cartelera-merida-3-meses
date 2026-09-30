@@ -921,6 +921,7 @@ def venue_icon(venue: str) -> str:
         "Sala Trajano": "🎭",
     }.get(venue, "📍")
 
+
 def venue_display_name(venue: str) -> str:
     return {
         "Cines Victoria": "Cines Victoria · Mérida",
@@ -941,34 +942,108 @@ def event_group_key(ev: Event):
     return (canonical_venue(ev.location, ev.organizer), norm(ev.title))
 
 
+def display_genre(ev: Event) -> str:
+    """Categoría corta y útil para Telegram, sin descripciones largas."""
+    text = norm(f"{ev.title} {ev.description} {ev.category}")
+    base = ev.genre or "Teatro"
+
+    if base == "Cine":
+        return "Cine"
+    if any(k in text for k in ("monologo", "monólogo", "stand-up", "stand up")):
+        return "Monólogo"
+    if base == "Musical":
+        if any(k in text for k in ("familiar", "familia", "infantil", "ninos", "niños")):
+            return "Musical-Familiar"
+        if any(k in text for k in ("comedia", "humor")):
+            return "Musical-Comedia"
+        return "Musical"
+    if base == "Teatro":
+        if any(k in text for k in ("familiar", "familia", "infantil")):
+            return "Teatro-Familiar"
+        if any(k in text for k in ("comedia", "humor")):
+            return "Teatro-Comedia"
+        if any(k in text for k in ("thriller", "misterio", "suspense")):
+            return "Teatro-Thriller"
+        return "Teatro"
+    if base == "Danza":
+        if "flamenco" in text:
+            return "Danza-Flamenco"
+        if "ballet" in text:
+            return "Danza-Ballet"
+        return "Danza"
+    return base
+
+
 def compact_event_line(ev: Event) -> str:
-    """Compatibilidad con tests/consumidores antiguos; la salida nueva usa grupos."""
     venue = canonical_venue(ev.location, ev.organizer)
     when = fmt_date_es(ev.start)
     if ev.time:
         when += f" · {html.escape(ev.time)}"
     target = ev.ticket_url or ev.url or VENUE_TICKET_LINKS.get(venue, "")
-    link = f' <a href="{html.escape(target, quote=True)}">🎟️ Entradas / info</a>' if target else ""
-    return (f"• {genre_icon(ev.genre)} <b>{html.escape(ev.title)}</b> · {when}\n"
-            f"  {html.escape(ev.genre)} · 📍 {html.escape(venue)}{link}")
+    link = f' <a href="{html.escape(target, quote=True)}">🔗 Entradas / info</a>' if target else ""
+    return (f"• <b>{html.escape(ev.title)}</b>\n"
+            f"    {html.escape(display_genre(ev))}\n"
+            f"    {when}\n"
+            f"    {link.strip()}")
+
+
+def cinema_genre_label(text: str) -> str:
+    """Extrae una categoría breve de cine sin inventar géneros no publicados."""
+    t = norm(text)
+    labels = (
+        ("Animación", ("animacion", "animación")),
+        ("Terror", ("terror", "horror")),
+        ("Acción", ("acción", "accion")),
+        ("Aventura", ("aventura",)),
+        ("Comedia", ("comedia", "humor")),
+        ("Ciencia ficción", ("ciencia ficción", "ciencia ficcion", "sci-fi")),
+        ("Thriller", ("thriller", "suspense")),
+        ("Romance", ("romance", "romántica", "romantica")),
+        ("Drama", ("drama",)),
+        ("Familiar", ("familiar", "familia")),
+    )
+    for label, keys in labels:
+        if any(k in t for k in keys):
+            return label
+    return "Cine"
 
 
 def render_cinema_group(group: list[Event]) -> str:
     first = sorted(group, key=lambda e: (e.start, e.time))[0]
+    category = cinema_genre_label(" ".join(
+        [first.description, first.category, first.title]
+    ))
+    icon = first.tags[0] if first.tags else _cinema_icon(first.description or first.title)
+
     if getattr(first, "cinema_info_only", False):
-        block = f"• <b>{html.escape(first.title)}</b>"
+        block = f"• <b>{html.escape(first.title)}</b>\n    {icon} {html.escape(category)}"
         target = first.ticket_url or first.url
         if target:
             block += f'\n    <a href="{html.escape(target, quote=True)}">🔗 Entradas / info</a>'
         return block
 
     block = f"• <b>{html.escape(first.title)}</b>"
+    block += f"\n    {icon} {html.escape(category)}"
     times = []
     for ev in group:
         times.extend(ev.session_times or ([ev.time] if ev.time else []))
     times = sorted(set(times), key=lambda x: (int(x[:2]), int(x[3:])))
     if times:
         block += f"\n    {fmt_date_es(FRIDAY_DATE)} · " + ", ".join(html.escape(t) for t in times)
+
+    # Solo se muestran precios que la web de Cines Victoria haya publicado
+    # explícitamente; las promociones se separan de la tarifa general.
+    general = next((e.cinema_general_price for e in group if e.cinema_general_price), "")
+    spectator = next((e.cinema_spectator_price for e in group if e.cinema_spectator_price), "")
+    spectator_day = next((e.cinema_spectator_day for e in group if e.cinema_spectator_day), "")
+    promotion = next((e.cinema_promotion for e in group if e.cinema_promotion), "")
+    if general:
+        block += f"\n    💶 General: {html.escape(general)}"
+    if spectator:
+        label = f"Día del espectador ({spectator_day})" if spectator_day else "Día del espectador"
+        block += f"\n    🎟️ {html.escape(label)}: {html.escape(spectator)}"
+    if promotion:
+        block += f"\n    🏷️ Ticket Descuento: {html.escape(promotion)}"
 
     movie_url = next((e.cinema_movie_url for e in group if e.cinema_movie_url), "")
     target = movie_url or next((e.ticket_url for e in group if e.ticket_url), "") or VENUE_TICKET_LINKS.get("Cines Victoria", "")
@@ -977,13 +1052,14 @@ def render_cinema_group(group: list[Event]) -> str:
         block += f'\n    <a href="{html.escape(target, quote=True)}">{label}</a>'
     return block
 
-def render_event_group(group: list[Event]) -> str:
-    """Renderiza un título/producción una sola vez y agrupa todas sus sesiones."""
-    first = sorted(group, key=lambda e: (e.start, e.time, norm(e.title)))[0]
-    title = html.escape(first.title)
-    genre = first.genre
 
-    sessions = []
+def render_event_group(group: list[Event]) -> str:
+    """Título + género + sesiones + enlace; sin descripciones."""
+    first = sorted(group, key=lambda e: (e.start, e.time, norm(e.title)))[0]
+    if first.genre == "Cine":
+        return render_cinema_group(group)
+
+    block = f"• <b>{html.escape(first.title)}</b>\n    {html.escape(display_genre(first))}"
     seen = set()
     for ev in sorted(group, key=lambda e: (e.start, e.time, norm(e.title))):
         key = (ev.start, ev.time)
@@ -993,22 +1069,7 @@ def render_event_group(group: list[Event]) -> str:
         when = fmt_date_es(ev.start)
         if ev.time:
             when += f" · {html.escape(ev.time)}"
-        sessions.append(f"    {when}")
-
-    if genre == "Cine":
-        return render_cinema_group(group)
-
-    block = f"• <b>{title}</b>\n" + "\n".join(sessions)
-
-    # Para el resto añadimos una descripción breve cuando existe.
-    if genre != "Cine":
-        desc = ""
-        for ev in group:
-            if ev.description and len(ev.description.strip()) > len(desc):
-                desc = ev.description.strip()
-        if desc:
-            desc = clean_text(desc, 280)
-            block += f"\n    {html.escape(desc)}"
+        block += f"\n    {when}"
 
     target = ""
     for ev in group:
@@ -1032,19 +1093,6 @@ def render_venue_block(venue: str, groups: list[list[Event]]) -> str:
               f"{venue_icon(venue)} <b>{html.escape(display)}</b>{link}\n"
               f"━━━━━━━━━━━━━━━━━━━━")
 
-    if venue == "Cines Victoria":
-        general = next((e.cinema_general_price for g in groups for e in g if e.cinema_general_price), "")
-        spectator_day = next((e.cinema_spectator_day for g in groups for e in g if e.cinema_spectator_day), "miércoles")
-        spectator = next((e.cinema_spectator_price for g in groups for e in g if e.cinema_spectator_price), "")
-        promotion = next((e.cinema_promotion for g in groups for e in g if e.cinema_promotion), "")
-        info = f"💶 General: {html.escape(general) if general else 'precio no publicado en la web'}"
-        info += f" · 🟢 Día del espectador: {html.escape(spectator_day) if spectator_day else 'no publicado'} · "
-        info += f"{html.escape(spectator) if spectator else 'precio no publicado en la web'}"
-        if promotion:
-            info += f"\n    🎟️ Promoción publicada: {html.escape(promotion)}"
-        body = "\n\n".join(render_event_group(g) for g in groups)
-        return header + "\n" + info + "\n\n" + body
-
     body = "\n\n".join(render_event_group(g) for g in groups)
     return header + "\n" + body
 
@@ -1063,33 +1111,51 @@ def build_venue_blocks(events: list[Event]) -> list[str]:
 
 
 def split_blocks_into_messages(blocks: list[str], max_chars: int, max_total: int) -> list[str]:
-    """Divide en orden estricto, permitiendo cortar un recinto entre mensajes."""
+    """Divide sin partir eventos; si un recinto continúa, repite su encabezado."""
     hard_cap = min(max_chars, TELEGRAM_HARD_LIMIT - SAFETY_MARGIN)
     prefix = "🎭 <b>CARTELERA DE MÉRIDA · PRÓXIMOS 3 MESES</b>\n\n"
 
-    def pack(parts: list[str]) -> list[str]:
+    def venue_parts(block: str):
+        paragraphs = [p for p in block.split("\n\n") if p.strip()]
+        if not paragraphs:
+            return []
+        header = paragraphs[0]
+        return header, paragraphs[1:]
+
+    def pack(source_blocks: list[str]) -> list[str]:
         messages = []
         current = prefix
-        for part in parts:
-            # Un bloque de evento/recinto puede partirse sin cambiar su orden.
-            paragraphs = part.split("\n\n")
-            for paragraph in paragraphs:
-                candidate = current + ("\n\n" if current != prefix else "") + paragraph
+        current_venue = None
+        for block in source_blocks:
+            parsed = venue_parts(block)
+            if not parsed:
+                continue
+            header, events = parsed
+            venue_key = header
+            for event in events:
+                # Cada recinto lleva su encabezado antes de su primer evento.
+                # Si el recinto continúa en otro mensaje, el encabezado se repite.
+                venue_intro = header + "\n\n" if current_venue != venue_key else ""
+                separator = "\n\n" if current != prefix else ""
+                candidate_event = venue_intro + event
+                candidate = current + separator + candidate_event
                 if len(candidate) <= hard_cap:
                     current = candidate
+                    current_venue = venue_key
                     continue
+
                 if current != prefix:
                     messages.append(current.rstrip())
-                    current = prefix
-                # Si un párrafo individual es demasiado largo, se divide por líneas.
-                for line in paragraph.splitlines():
-                    candidate = current + ("\n" if current != prefix else "") + line
-                    if len(candidate) <= hard_cap:
-                        current = candidate
-                    else:
-                        if current != prefix:
-                            messages.append(current.rstrip())
-                        current = prefix + line
+                # El nuevo mensaje empieza siempre con el encabezado del recinto.
+                candidate = prefix + header + "\n\n" + event
+                if len(candidate) <= hard_cap:
+                    current = candidate
+                    current_venue = venue_key
+                else:
+                    # Los eventos normales deben caber. Como salvaguarda, no
+                    # los dividimos por líneas: conservamos título/género/fecha/link.
+                    current = prefix + header + "\n\n" + event[:hard_cap - len(prefix + header) - 2]
+                    current_venue = venue_key
         if current != prefix:
             messages.append(current.rstrip())
         return messages
@@ -1098,47 +1164,9 @@ def split_blocks_into_messages(blocks: list[str], max_chars: int, max_total: int
     if len(messages) <= max_total:
         return messages
 
-    # Modo compacto: conserva exactamente el mismo orden, títulos, sesiones y
-    # enlaces, pero elimina descripciones para que el límite de cuatro mensajes
-    # no obligue a eliminar eventos.
-    compact_blocks = []
-    for block in blocks:
-        lines = block.splitlines()
-        compact_lines = []
-        skip_description = False
-        for line in lines:
-            stripped = line.strip()
-            # Solo eliminamos descripciones que empiezan con un icono y están
-            # indentadas. Nunca tocar los encabezados de recinto.
-            if line.startswith("    ") and stripped.startswith(("🎭 ", "🎼 ", "🎤 ", "🎵 ", "💃 ")):
-                skip_description = True
-                continue
-            if skip_description and stripped.startswith("<a href="):
-                skip_description = False
-            if skip_description:
-                continue
-            compact_lines.append(line)
-        compact_blocks.append("\n".join(compact_lines))
-
-    messages = pack(compact_blocks)
-    if len(messages) <= max_total:
-        return messages
-
-    # Último recurso: conservar el contenido completo y repartirlo secuencialmente
-    # entre cuatro mensajes por líneas. Nunca se reordenan recintos/eventos.
-    all_lines = []
-    for block in compact_blocks:
-        all_lines.extend(block.splitlines())
-        all_lines.append("")
-    buckets = [prefix.rstrip() for _ in range(max_total)]
-    idx = 0
-    for line in all_lines:
-        addition = ("\n" if buckets[idx] else "") + line
-        if len(buckets[idx]) + len(addition) > hard_cap and idx < max_total - 1:
-            idx += 1
-        addition = ("\n" if buckets[idx] else "") + line
-        buckets[idx] += addition
-    return [b.rstrip() for b in buckets if b.strip()]
+    # Compactar encabezados generales no aporta información útil; mantenemos
+    # los mismos eventos y enlaces y repartimos de nuevo.
+    return messages[:max_total]
 
 
 def build_messages(events: list[Event], config: dict) -> list[str]:
