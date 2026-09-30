@@ -166,3 +166,18 @@ def test_merida_event_link_accepts_detail_and_rejects_navigation():
     assert not agenda._merida_is_real_event_link(
         "https://merida.es/agenda/categoria/teatro/", "Teatro"
     )
+
+
+def test_ticket_descuento_is_under_cines_victoria_header():
+    e = agenda.make_event("Coyote vs Acme", date(2026, 10, 2), date(2026, 10, 2), "17:00",
+                          "Cines Victoria", "Acción", "https://cine.example/movie",
+                          "Cines Victoria", category="Cine")
+    e.genre = "Cine"
+    e.session_times = ["17:00"]
+    e.cinema_promotion = "5,50 €"
+    text = agenda.render_venue_block("Cines Victoria", [[e]])
+    header_pos = text.index("Cines Victoria")
+    ticket_pos = text.index("Ticket Descuento")
+    movie_pos = text.index("Coyote vs Acme")
+    assert header_pos < ticket_pos < movie_pos
+    assert "🏷️ Ticket Descuento: 5,50 €" in text

@@ -27,10 +27,12 @@ import re
 import html
 import hashlib
 import logging
+import json
+from pathlib import Path
 import time
 import calendar
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -1089,9 +1091,19 @@ def render_venue_block(venue: str, groups: list[list[Event]]) -> str:
     # Encabezado de recinto muy visible para que, incluso si Telegram corta
     # un bloque entre mensajes, quede inequívoca la ubicación.
     display = venue_display_name(venue)
-    header = (f"━━━━━━━━━━━━━━━━━━━━\n"
-              f"{venue_icon(venue)} <b>{html.escape(display)}</b>{link}\n"
-              f"━━━━━━━━━━━━━━━━━━━━")
+    header_lines = [f"━━━━━━━━━━━━━━━━━━━━",
+                    f"{venue_icon(venue)} <b>{html.escape(display)}</b>{link}"]
+
+    # Ticket Descuento es una tarifa de la sede, no de cada película.
+    # Se muestra una sola vez, inmediatamente debajo de Cines Victoria.
+    if venue == "Cines Victoria":
+        promotion = next((e.cinema_promotion for g in groups for e in g
+                          if e.cinema_promotion), "")
+        if promotion:
+            header_lines.append(f"🏷️ Ticket Descuento: {html.escape(promotion)}")
+
+    header_lines.append("━━━━━━━━━━━━━━━━━━━━")
+    header = "\n".join(header_lines)
 
     body = "\n\n".join(render_event_group(g) for g in groups)
     return header + "\n" + body
@@ -1201,6 +1213,45 @@ def telegram_send(token: str, chat_id: str, text: str, max_retries: int = 3):
         raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text}")
     raise RuntimeError("Telegram: no se pudo enviar tras varios reintentos")
 
+
+def telegram_delete(token: str, chat_id: str, message_id: int, max_retries: int = 3):
+    url = f"https://api.telegram.org/bot{token}/deleteMessage"
+    for attempt in range(1, max_retries + 1):
+        r = requests.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=TIMEOUT)
+        if r.status_code == 200:
+            return True
+        if r.status_code == 429:
+            try:
+                retry_after = r.json().get("parameters", {}).get("retry_after", 3)
+            except Exception:
+                retry_after = 3
+            time.sleep(retry_after + 1)
+            continue
+        # Si el mensaje ya no existe o Telegram no permite borrarlo, no
+        # bloqueamos la publicación de la nueva cartelera.
+        logging.warning("No se pudo borrar %s/%s: Telegram HTTP %s: %s",
+                        chat_id, message_id, r.status_code, r.text)
+        return False
+    logging.warning("No se pudo borrar %s/%s tras varios reintentos", chat_id, message_id)
+    return False
+
+
+STATE_FILE = Path(__file__).resolve().parent / ".telegram_state.json"
+
+def load_telegram_state() -> dict:
+    if not STATE_FILE.exists():
+        return {}
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logging.warning("No se pudo leer %s: %s", STATE_FILE, exc)
+        return {}
+
+def save_telegram_state(state: dict):
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(STATE_FILE)
+
 def main():
     with open("config.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
@@ -1217,18 +1268,44 @@ def main():
     messages = build_messages(events, config)
     logging.info("Mensajes a enviar: %d", len(messages))
 
-    failures = []
+    # El repositorio conserva los IDs de los mensajes de la última ejecución.
+    # Antes de publicar la nueva cartelera, elimina esos mensajes para que
+    # Telegram conserve únicamente la versión más reciente.
+    state = load_telegram_state()
+    previous = state.get("chats", {}) if isinstance(state, dict) else {}
     for chat_id in chat_ids:
+        old_ids = previous.get(str(chat_id), {}).get("message_ids", [])
+        for message_id in old_ids:
+            telegram_delete(token, chat_id, int(message_id))
+
+    failures = []
+    new_state = {"version": 1, "updated_at": datetime.now(timezone.utc).isoformat(), "chats": {}}
+    for chat_id in chat_ids:
+        sent_ids = []
         for i, msg in enumerate(messages, 1):
             try:
-                telegram_send(token, chat_id, msg)
+                result = telegram_send(token, chat_id, msg)
+                message_id = result.get("result", {}).get("message_id")
+                if message_id is not None:
+                    sent_ids.append(int(message_id))
+                else:
+                    failures.append(f"{chat_id} msg {i}: Telegram no devolvió message_id")
             except Exception as exc:
                 failures.append(f"{chat_id} msg {i}: {exc}")
             if i < len(messages):
                 time.sleep(1.2)
+        new_state["chats"][str(chat_id)] = {
+            "message_ids": sent_ids,
+            "sent_on": TODAY.isoformat(),
+            "message_count": len(sent_ids),
+        }
+
     if failures:
+        # No consolidamos una ejecución incompleta como versión definitiva.
         raise RuntimeError(" | ".join(failures))
-    print("OK: cartelera enviada correctamente.")
+
+    save_telegram_state(new_state)
+    print("OK: cartelera enviada y IDs guardados para sustituirla el próximo viernes.")
 
 if __name__ == "__main__":
     main()

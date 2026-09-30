@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 .env
 .pytest_cache/
+# IDs de mensajes Telegram: se versionan intencionadamente para sustituir
+# la cartelera anterior en la siguiente ejecución.
