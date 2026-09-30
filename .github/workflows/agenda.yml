@@ -38,7 +38,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .telegram_state.json
+          git add cartelera/.telegram_state.json
           if git diff --cached --quiet; then
             echo "No hay cambios en el estado de Telegram."
           else
