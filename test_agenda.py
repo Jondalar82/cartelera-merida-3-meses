@@ -77,7 +77,6 @@ def test_cinema_group_uses_single_title_and_all_sessions():
     b.tags = ["💥"]
     text = agenda.render_event_group([a, b])
     assert text.count("Coyote vs Acme") == 1
-    assert "💥 Acción" in text
     assert "17:30, 18:00, 19:00, 20:45" in text
     assert "🔗 Entradas / info" in text
 
@@ -166,69 +165,3 @@ def test_merida_event_link_accepts_detail_and_rejects_navigation():
     assert not agenda._merida_is_real_event_link(
         "https://merida.es/agenda/categoria/teatro/", "Teatro"
     )
-
-
-def test_ticket_descuento_is_under_cines_victoria_header():
-    e = agenda.make_event("Coyote vs Acme", date(2026, 10, 2), date(2026, 10, 2), "17:00",
-                          "Cines Victoria", "Acción", "https://cine.example/movie",
-                          "Cines Victoria", category="Cine")
-    e.genre = "Cine"
-    e.session_times = ["17:00"]
-    e.cinema_promotion = "5,50 €"
-    text = agenda.render_venue_block("Cines Victoria", [[e]])
-    header_pos = text.index("Cines Victoria")
-    ticket_pos = text.index("Ticket Descuento")
-    movie_pos = text.index("Coyote vs Acme")
-    assert header_pos < ticket_pos < movie_pos
-    assert "🏷️ Ticket Descuento: 5,50 €" in text
-
-
-def test_ticket_descuento_only_appears_under_cines_victoria_header():
-    e = agenda.make_event("Coyote vs Acme", date(2026, 10, 2), date(2026, 10, 2), "17:00",
-                          "Cines Victoria", "Acción", "https://cine.example/movie",
-                          "Cines Victoria", category="Cine")
-    e.genre = "Cine"
-    e.session_times = ["17:00"]
-    e.cinema_promotion = "5,50 €"
-    text = agenda.render_venue_block("Cines Victoria", [[e]])
-    assert text.count("Ticket Descuento") == 1
-
-
-def test_cine_cycle_sources_are_merged_prefer_cineclub_forum():
-    victoria = agenda.make_event(
-        "40º ciclo de cine V.O.S.E. Del 14 de septiembre al 26 de octubre",
-        date(2026, 10, 2), date(2026, 10, 2), "", "Cines Victoria", "",
-        "https://www.cinesvictoria.com/cine/M%C3%A9rida/", "Cines Victoria", category="Cine")
-    victoria.genre = "Cine"
-    victoria.cinema_info_only = True
-    forum = agenda.make_event(
-        "40º Ciclo de Cine – 14 SEP al 26 OCT 2026",
-        date(2026, 9, 14), date(2026, 10, 26), "", "Cineclub Fórum", "",
-        "https://festivalcinemerida.com/cineclub/", "Cine Club Fórum", category="Cine")
-    forum.genre = "Cine"
-    forum.cinema_info_only = True
-    merged = agenda.merge_cinema_cycle_sources([victoria, forum])
-    assert len(merged) == 1
-    assert agenda.canonical_venue(merged[0].location, merged[0].organizer) == "Cineclub Fórum"
-    assert merged[0].title == forum.title
-    assert merged[0].url == forum.url
-
-
-def test_palcongrex_title_overrides_generic_categories():
-    cases = [
-        ("Ángel Martín: Somos Monos", "Monólogo"),
-        ("Orquesta de Extremadura: Comunidades Imaginadas", "Concierto"),
-        ("De Simba a Kiara. El Tributo al Rey León.", "Musical-Familiar"),
-        ("Sara Baras. Infinita", "Danza-Flamenco"),
-        ("Circo Musical de Mickey Mouse", "Musical-Familiar"),
-        ("Francisco. Gira 45 aniversario", "Concierto"),
-        ("El Lago de los Cisnes. Ballet de Kiev", "Danza-Ballet"),
-        ("Rafa Sánchez. De la Unión. Biografía", "Concierto"),
-        ("MIT Jazz: Concierto Arcadi Volodos", "Concierto"),
-        ("El Gran Showman. El Musical", "Musical"),
-    ]
-    for title, expected in cases:
-        e = agenda.make_event(title, date(2026, 10, 2), date(2026, 10, 2), "",
-                              "Palacio de Congresos", "", "https://example.com",
-                              "Palcongrex", category="Teatro")
-        assert agenda.display_genre(e) == expected

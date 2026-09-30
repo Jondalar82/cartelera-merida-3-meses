@@ -27,13 +27,13 @@ import re
 import html
 import hashlib
 import logging
-import json
-from pathlib import Path
 import time
 import calendar
+import json
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from urllib.parse import urljoin, urlparse
+from pathlib import Path
 
 import requests
 import yaml
@@ -442,6 +442,7 @@ def scrape_palcongrex() -> list[Event]:
             seen.add(key)
             a=row.find("a",href=True); href=urljoin(url,a.get("href")) if a else url
             ev=make_event(title,st,en,"","Palacio de Congresos","",href,"Palcongrex",city="Mérida",category=typ)
+            if norm(typ)=="espectáculos": ev.genre="Teatro"
             if ev.genre: events.append(ev); page_found+=1
         if page_found==0 and page>0: break
     return events
@@ -461,26 +462,6 @@ EXCLUDE_KW = [
     "pleno municipal", "acto institucional", "inauguración", "inauguracion",
     "feria de empleo", "convención profesional", "convencion profesional",
 ]
-PALCONGREX_TITLE_OVERRIDES = (
-    (("ángel martín", "angel martin"), "Monólogo"),
-    (("orquesta de extremadura",), "Concierto"),
-    (("simba a kiara", "tributo al rey león", "tributo al rey leon"), "Musical-Familiar"),
-    (("sara baras",), "Danza-Flamenco"),
-    (("circo musical de mickey mouse",), "Musical-Familiar"),
-    (("francisco. gira", "francisco gira"), "Concierto"),
-    (("lago de los cisnes", "ballet de kiev"), "Danza-Ballet"),
-    (("rafa sánchez", "rafa sanchez", "de la unión", "de la union"), "Concierto"),
-    (("mit jazz", "arcadi volodos"), "Concierto"),
-    (("gran showman",), "Musical"),
-)
-
-def palcongrex_title_genre(title: str) -> str:
-    t = norm(title)
-    for keys, genre in PALCONGREX_TITLE_OVERRIDES:
-        if any(k in t for k in keys):
-            return genre
-    return ""
-
 GENRE_PATTERNS = {
     "Monólogo": [
         "monólogo", "monologo", "stand-up", "stand up", "humor"
@@ -508,12 +489,6 @@ GENRE_PATTERNS = {
 def classify_event(ev: Event) -> None:
     text = norm(" ".join([ev.title, ev.category, ev.description]))
     title_cat = norm(" ".join([ev.title, ev.category]))
-
-    if norm(ev.source) == "palcongrex":
-        override = palcongrex_title_genre(ev.title)
-        if override:
-            ev.genre = override.split("-", 1)[0]
-            return
     # Exclusiones fuertes. "Cine" comercial se permite; una película se clasifica
     # como Cine aunque no contenga palabras de "ciclo".
     if any(k in text for k in EXCLUDE_KW):
@@ -803,26 +778,6 @@ def scrape_cines_victoria() -> list[Event]:
     return events
 
 
-def cinema_cycle_key(title: str) -> str | None:
-    """Identifica la misma edición de un ciclo VOSE/cine publicada por
-    Cines Victoria y Cineclub Fórum aunque el texto del título difiera."""
-    t = norm(title)
-    if "ciclo" not in t or not any(k in t for k in ("cine", "vose", "v.o.s.e", "version original")):
-        return None
-    ordinal = re.search(r"\b(\d{1,3})\s*(?:º|ª|o|a)?\s*ciclo\b", t)
-    year = re.search(r"\b(20\d{2})\b", t)
-    if not ordinal:
-        return None
-    return f"cine-ciclo|{ordinal.group(1)}|{year.group(1) if year else TODAY.year}"
-
-def normalize_cinema_cycle_event(ev: Event) -> Event:
-    if cinema_cycle_key(ev.title):
-        ev.cinema_info_only = True
-        ev.session_times = []
-        ev.time = ""
-        ev.tags = ["🎬"]
-    return ev
-
 def scrape_cineclub_merida() -> list[Event]:
     """Fuente complementaria del Cine Club Fórum. Se usa como fuente de
     confirmación/enlace, no para inventar fechas que no estén publicadas."""
@@ -846,7 +801,6 @@ def scrape_cineclub_merida() -> list[Event]:
                         txt, urljoin(url, a.get("href")) if a else url,
                         "Cine Club Fórum", category="Cine", city="Mérida")
         ev.genre = "Cine"
-        normalize_cinema_cycle_event(ev)
         events.append(ev)
     return events
 
@@ -915,34 +869,9 @@ def collect_events() -> list[Event]:
     # Una misma producción puede salir en fuentes distintas con pequeñas
     # diferencias de nombre. merge_repeated_events se conserva para las
     # sesiones/fechas repetidas del mismo título y recinto.
-    events = merge_cinema_cycle_sources(events)
     events = merge_repeated_events(events)
     events = enrich_ticket_links(events)
     return sorted(events, key=lambda e: (e.start, e.time, norm(e.title)))
-
-def merge_cinema_cycle_sources(events: list[Event]) -> list[Event]:
-    """Fusiona el mismo ciclo publicado por Cines Victoria y Cineclub Fórum.
-    Se prefiere Cineclub Fórum como recinto/fuente cuando existe, aunque las
-    sesiones se celebren en Cines Victoria.
-    """
-    cycle_groups = {}
-    ordinary = []
-    for ev in events:
-        key = cinema_cycle_key(ev.title) if ev.genre == "Cine" else None
-        if key:
-            cycle_groups.setdefault(key, []).append(ev)
-        else:
-            ordinary.append(ev)
-    for group in cycle_groups.values():
-        forum = next((e for e in group if canonical_venue(e.location, e.organizer) == "Cineclub Fórum"), None)
-        victoria = next((e for e in group if canonical_venue(e.location, e.organizer) == "Cines Victoria"), None)
-        chosen = forum or victoria or group[0]
-        chosen.cinema_info_only = True
-        chosen.session_times = []
-        chosen.time = ""
-        chosen.tags = ["🎬"]
-        ordinary.append(chosen)
-    return ordinary
 
 def merge_repeated_events(events: list[Event]) -> list[Event]:
     groups = {}
@@ -1018,10 +947,6 @@ def event_group_key(ev: Event):
 def display_genre(ev: Event) -> str:
     """Categoría corta y útil para Telegram, sin descripciones largas."""
     text = norm(f"{ev.title} {ev.description} {ev.category}")
-    if norm(ev.source) == "palcongrex":
-        override = palcongrex_title_genre(ev.title)
-        if override:
-            return override
     base = ev.genre or "Teatro"
 
     if base == "Cine":
@@ -1064,43 +989,17 @@ def compact_event_line(ev: Event) -> str:
             f"    {link.strip()}")
 
 
-def cinema_genre_label(text: str) -> str:
-    """Extrae una categoría breve de cine sin inventar géneros no publicados."""
-    t = norm(text)
-    labels = (
-        ("Animación", ("animacion", "animación")),
-        ("Terror", ("terror", "horror")),
-        ("Acción", ("acción", "accion")),
-        ("Aventura", ("aventura",)),
-        ("Comedia", ("comedia", "humor")),
-        ("Ciencia ficción", ("ciencia ficción", "ciencia ficcion", "sci-fi")),
-        ("Thriller", ("thriller", "suspense")),
-        ("Romance", ("romance", "romántica", "romantica")),
-        ("Drama", ("drama",)),
-        ("Familiar", ("familiar", "familia")),
-    )
-    for label, keys in labels:
-        if any(k in t for k in keys):
-            return label
-    return "Cine"
-
-
 def render_cinema_group(group: list[Event]) -> str:
     first = sorted(group, key=lambda e: (e.start, e.time))[0]
-    category = cinema_genre_label(" ".join(
-        [first.description, first.category, first.title]
-    ))
-    icon = first.tags[0] if first.tags else _cinema_icon(first.description or first.title)
-
     if getattr(first, "cinema_info_only", False):
-        block = f"• <b>{html.escape(first.title)}</b>\n    {icon} {html.escape(category)}"
+        block = f"• <b>{html.escape(first.title)}</b>\n    Cine"
         target = first.ticket_url or first.url
         if target:
             block += f'\n    <a href="{html.escape(target, quote=True)}">🔗 Entradas / info</a>'
         return block
 
     block = f"• <b>{html.escape(first.title)}</b>"
-    block += f"\n    {icon} {html.escape(category)}"
+    block += "\n    Cine"
     times = []
     for ev in group:
         times.extend(ev.session_times or ([ev.time] if ev.time else []))
@@ -1108,17 +1007,6 @@ def render_cinema_group(group: list[Event]) -> str:
     if times:
         block += f"\n    {fmt_date_es(FRIDAY_DATE)} · " + ", ".join(html.escape(t) for t in times)
 
-    # Solo se muestran precios que la web de Cines Victoria haya publicado
-    # explícitamente; las promociones se separan de la tarifa general.
-    general = next((e.cinema_general_price for e in group if e.cinema_general_price), "")
-    spectator = next((e.cinema_spectator_price for e in group if e.cinema_spectator_price), "")
-    spectator_day = next((e.cinema_spectator_day for e in group if e.cinema_spectator_day), "")
-    promotion = next((e.cinema_promotion for e in group if e.cinema_promotion), "")
-    if general:
-        block += f"\n    💶 General: {html.escape(general)}"
-    if spectator:
-        label = f"Día del espectador ({spectator_day})" if spectator_day else "Día del espectador"
-        block += f"\n    🎟️ {html.escape(label)}: {html.escape(spectator)}"
     movie_url = next((e.cinema_movie_url for e in group if e.cinema_movie_url), "")
     target = movie_url or next((e.ticket_url for e in group if e.ticket_url), "") or VENUE_TICKET_LINKS.get("Cines Victoria", "")
     if target:
@@ -1163,19 +1051,9 @@ def render_venue_block(venue: str, groups: list[list[Event]]) -> str:
     # Encabezado de recinto muy visible para que, incluso si Telegram corta
     # un bloque entre mensajes, quede inequívoca la ubicación.
     display = venue_display_name(venue)
-    header_lines = [f"━━━━━━━━━━━━━━━━━━━━",
-                    f"{venue_icon(venue)} <b>{html.escape(display)}</b>{link}"]
-
-    # Ticket Descuento es una tarifa de la sede, no de cada película.
-    # Se muestra una sola vez, inmediatamente debajo de Cines Victoria.
-    if venue == "Cines Victoria":
-        promotion = next((e.cinema_promotion for g in groups for e in g
-                          if e.cinema_promotion), "")
-        if promotion:
-            header_lines.append(f"🏷️ Ticket Descuento: {html.escape(promotion)}")
-
-    header_lines.append("━━━━━━━━━━━━━━━━━━━━")
-    header = "\n".join(header_lines)
+    header = (f"━━━━━━━━━━━━━━━━━━━━\n"
+              f"{venue_icon(venue)} <b>{html.escape(display)}</b>{link}\n"
+              f"━━━━━━━━━━━━━━━━━━━━")
 
     body = "\n\n".join(render_event_group(g) for g in groups)
     return header + "\n" + body
@@ -1266,63 +1144,72 @@ def build_messages(events: list[Event], config: dict) -> list[str]:
         )]
     return split_blocks_into_messages(blocks, max_chars, max_total)
 
+TELEGRAM_STATE_FILE = ".telegram_state.json"
+
+def telegram_api(token: str, method: str, payload: dict, max_retries: int = 3):
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    for _ in range(1, max_retries + 1):
+        r = requests.post(url, json=payload, timeout=TIMEOUT)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("ok"):
+                return data
+            raise RuntimeError(f"Telegram {method}: {data}")
+        if r.status_code == 429:
+            try:
+                retry_after = r.json().get("parameters", {}).get("retry_after", 3)
+            except Exception:
+                retry_after = 3
+            time.sleep(retry_after + 1)
+            continue
+        raise RuntimeError(f"Telegram HTTP {r.status_code} ({method}): {r.text}")
+    raise RuntimeError(f"Telegram: {method} no se pudo completar tras varios reintentos")
+
+def telegram_delete(token: str, chat_id: str, message_id: int):
+    return telegram_api(token, "deleteMessage", {
+        "chat_id": chat_id,
+        "message_id": message_id,
+    })
+
 def telegram_send(token: str, chat_id: str, text: str, max_retries: int = 3):
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    for attempt in range(1, max_retries + 1):
-        r = requests.post(url, json={
-            "chat_id": chat_id, "text": text, "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }, timeout=TIMEOUT)
-        if r.status_code == 200:
-            return r.json()
-        if r.status_code == 429:
-            try:
-                retry_after = r.json().get("parameters", {}).get("retry_after", 3)
-            except Exception:
-                retry_after = 3
-            time.sleep(retry_after + 1)
-            continue
-        raise RuntimeError(f"Telegram HTTP {r.status_code}: {r.text}")
-    raise RuntimeError("Telegram: no se pudo enviar tras varios reintentos")
-
-
-def telegram_delete(token: str, chat_id: str, message_id: int, max_retries: int = 3):
-    url = f"https://api.telegram.org/bot{token}/deleteMessage"
-    for attempt in range(1, max_retries + 1):
-        r = requests.post(url, json={"chat_id": chat_id, "message_id": message_id}, timeout=TIMEOUT)
-        if r.status_code == 200:
-            return True
-        if r.status_code == 429:
-            try:
-                retry_after = r.json().get("parameters", {}).get("retry_after", 3)
-            except Exception:
-                retry_after = 3
-            time.sleep(retry_after + 1)
-            continue
-        # Si el mensaje ya no existe o Telegram no permite borrarlo, no
-        # bloqueamos la publicación de la nueva cartelera.
-        logging.warning("No se pudo borrar %s/%s: Telegram HTTP %s: %s",
-                        chat_id, message_id, r.status_code, r.text)
-        return False
-    logging.warning("No se pudo borrar %s/%s tras varios reintentos", chat_id, message_id)
-    return False
-
-
-STATE_FILE = Path(__file__).resolve().parent / ".telegram_state.json"
+    return telegram_api(token, "sendMessage", {
+        "chat_id": chat_id, "text": text, "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }, max_retries=max_retries)
 
 def load_telegram_state() -> dict:
-    if not STATE_FILE.exists():
-        return {}
+    path = Path(TELEGRAM_STATE_FILE)
+    if not path.exists():
+        return {"chats": {}}
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {"chats": {}}
     except Exception as exc:
-        logging.warning("No se pudo leer %s: %s", STATE_FILE, exc)
-        return {}
+        logging.warning("No se pudo leer %s: %s", TELEGRAM_STATE_FILE, exc)
+        return {"chats": {}}
 
 def save_telegram_state(state: dict):
-    tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(STATE_FILE)
+    Path(TELEGRAM_STATE_FILE).write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+def delete_previous_messages(token: str, chat_id: str, state: dict):
+    chat_state = state.get("chats", {}).get(str(chat_id), {})
+    previous_ids = chat_state.get("message_ids", []) if isinstance(chat_state, dict) else []
+    if not previous_ids:
+        logging.info("Telegram %s: no hay mensajes anteriores registrados.", chat_id)
+        return
+    for message_id in previous_ids:
+        try:
+            telegram_delete(token, chat_id, int(message_id))
+            logging.info("Telegram %s: eliminado mensaje anterior %s", chat_id, message_id)
+        except Exception as exc:
+            # No abortamos la publicación: Telegram puede rechazar el borrado por
+            # antigüedad/permisos. El nuevo bloque debe publicarse igualmente.
+            logging.warning(
+                "Telegram %s: no se pudo borrar mensaje anterior %s: %s",
+                chat_id, message_id, exc
+            )
 
 def main():
     with open("config.yaml", "r", encoding="utf-8") as f:
@@ -1340,44 +1227,42 @@ def main():
     messages = build_messages(events, config)
     logging.info("Mensajes a enviar: %d", len(messages))
 
-    # El repositorio conserva los IDs de los mensajes de la última ejecución.
-    # Antes de publicar la nueva cartelera, elimina esos mensajes para que
-    # Telegram conserve únicamente la versión más reciente.
     state = load_telegram_state()
-    previous = state.get("chats", {}) if isinstance(state, dict) else {}
-    for chat_id in chat_ids:
-        old_ids = previous.get(str(chat_id), {}).get("message_ids", [])
-        for message_id in old_ids:
-            telegram_delete(token, chat_id, int(message_id))
-
+    state.setdefault("chats", {})
     failures = []
-    new_state = {"version": 1, "updated_at": datetime.now(timezone.utc).isoformat(), "chats": {}}
+
     for chat_id in chat_ids:
-        sent_ids = []
+        # Cada ejecución intenta eliminar primero TODOS los mensajes de la
+        # ejecución anterior que quedaron registrados. Después publica de nuevo
+        # para que la cartelera vuelva a aparecer al final del chat.
+        delete_previous_messages(token, chat_id, state)
+
+        new_message_ids = []
         for i, msg in enumerate(messages, 1):
             try:
                 result = telegram_send(token, chat_id, msg)
                 message_id = result.get("result", {}).get("message_id")
                 if message_id is not None:
-                    sent_ids.append(int(message_id))
+                    new_message_ids.append(int(message_id))
                 else:
-                    failures.append(f"{chat_id} msg {i}: Telegram no devolvió message_id")
+                    raise RuntimeError("Telegram no devolvió message_id")
             except Exception as exc:
                 failures.append(f"{chat_id} msg {i}: {exc}")
             if i < len(messages):
                 time.sleep(1.2)
-        new_state["chats"][str(chat_id)] = {
-            "message_ids": sent_ids,
-            "sent_on": TODAY.isoformat(),
-            "message_count": len(sent_ids),
+
+        # Guardamos los IDs que sí se han publicado. Si hubo un fallo parcial,
+        # conservar estos IDs permite intentar limpiarlos en la próxima ejecución.
+        state["chats"][str(chat_id)] = {
+            "message_ids": new_message_ids,
+            "updated": TODAY.isoformat(),
         }
 
-    if failures:
-        # No consolidamos una ejecución incompleta como versión definitiva.
-        raise RuntimeError(" | ".join(failures))
+    save_telegram_state(state)
 
-    save_telegram_state(new_state)
-    print("OK: cartelera enviada y IDs guardados para sustituirla el próximo viernes.")
+    if failures:
+        raise RuntimeError(" | ".join(failures))
+    print("OK: cartelera enviada correctamente.")
 
 if __name__ == "__main__":
     main()
