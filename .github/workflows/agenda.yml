@@ -5,21 +5,43 @@ on:
     - cron: "0 6 * * 5"
   workflow_dispatch:
 
+# Necesario para que GitHub Actions pueda guardar .telegram_state.json
+# con los IDs de los mensajes publicados por el bot.
+permissions:
+  contents: write
+
 jobs:
   agenda:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Instalar dependencias
         run: pip install -r requirements.txt
+
       - name: Ejecutar cartelera
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
         run: python agenda.py
+
+      - name: Guardar IDs de Telegram para la próxima semana
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .telegram_state.json
+          if git diff --cached --quiet; then
+            echo "No hay cambios en el estado de Telegram."
+          else
+            git commit -m "chore: guardar IDs de cartelera Telegram"
+            git push
+          fi
