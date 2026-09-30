@@ -442,7 +442,6 @@ def scrape_palcongrex() -> list[Event]:
             seen.add(key)
             a=row.find("a",href=True); href=urljoin(url,a.get("href")) if a else url
             ev=make_event(title,st,en,"","Palacio de Congresos","",href,"Palcongrex",city="Mérida",category=typ)
-            if norm(typ)=="espectáculos": ev.genre="Teatro"
             if ev.genre: events.append(ev); page_found+=1
         if page_found==0 and page>0: break
     return events
@@ -462,6 +461,26 @@ EXCLUDE_KW = [
     "pleno municipal", "acto institucional", "inauguración", "inauguracion",
     "feria de empleo", "convención profesional", "convencion profesional",
 ]
+PALCONGREX_TITLE_OVERRIDES = (
+    (("ángel martín", "angel martin"), "Monólogo"),
+    (("orquesta de extremadura",), "Concierto"),
+    (("simba a kiara", "tributo al rey león", "tributo al rey leon"), "Musical-Familiar"),
+    (("sara baras",), "Danza-Flamenco"),
+    (("circo musical de mickey mouse",), "Musical-Familiar"),
+    (("francisco. gira", "francisco gira"), "Concierto"),
+    (("lago de los cisnes", "ballet de kiev"), "Danza-Ballet"),
+    (("rafa sánchez", "rafa sanchez", "de la unión", "de la union"), "Concierto"),
+    (("mit jazz", "arcadi volodos"), "Concierto"),
+    (("gran showman",), "Musical"),
+)
+
+def palcongrex_title_genre(title: str) -> str:
+    t = norm(title)
+    for keys, genre in PALCONGREX_TITLE_OVERRIDES:
+        if any(k in t for k in keys):
+            return genre
+    return ""
+
 GENRE_PATTERNS = {
     "Monólogo": [
         "monólogo", "monologo", "stand-up", "stand up", "humor"
@@ -489,6 +508,12 @@ GENRE_PATTERNS = {
 def classify_event(ev: Event) -> None:
     text = norm(" ".join([ev.title, ev.category, ev.description]))
     title_cat = norm(" ".join([ev.title, ev.category]))
+
+    if norm(ev.source) == "palcongrex":
+        override = palcongrex_title_genre(ev.title)
+        if override:
+            ev.genre = override.split("-", 1)[0]
+            return
     # Exclusiones fuertes. "Cine" comercial se permite; una película se clasifica
     # como Cine aunque no contenga palabras de "ciclo".
     if any(k in text for k in EXCLUDE_KW):
@@ -778,6 +803,26 @@ def scrape_cines_victoria() -> list[Event]:
     return events
 
 
+def cinema_cycle_key(title: str) -> str | None:
+    """Identifica la misma edición de un ciclo VOSE/cine publicada por
+    Cines Victoria y Cineclub Fórum aunque el texto del título difiera."""
+    t = norm(title)
+    if "ciclo" not in t or not any(k in t for k in ("cine", "vose", "v.o.s.e", "version original")):
+        return None
+    ordinal = re.search(r"\b(\d{1,3})\s*(?:º|ª|o|a)?\s*ciclo\b", t)
+    year = re.search(r"\b(20\d{2})\b", t)
+    if not ordinal:
+        return None
+    return f"cine-ciclo|{ordinal.group(1)}|{year.group(1) if year else TODAY.year}"
+
+def normalize_cinema_cycle_event(ev: Event) -> Event:
+    if cinema_cycle_key(ev.title):
+        ev.cinema_info_only = True
+        ev.session_times = []
+        ev.time = ""
+        ev.tags = ["🎬"]
+    return ev
+
 def scrape_cineclub_merida() -> list[Event]:
     """Fuente complementaria del Cine Club Fórum. Se usa como fuente de
     confirmación/enlace, no para inventar fechas que no estén publicadas."""
@@ -801,6 +846,7 @@ def scrape_cineclub_merida() -> list[Event]:
                         txt, urljoin(url, a.get("href")) if a else url,
                         "Cine Club Fórum", category="Cine", city="Mérida")
         ev.genre = "Cine"
+        normalize_cinema_cycle_event(ev)
         events.append(ev)
     return events
 
@@ -869,9 +915,34 @@ def collect_events() -> list[Event]:
     # Una misma producción puede salir en fuentes distintas con pequeñas
     # diferencias de nombre. merge_repeated_events se conserva para las
     # sesiones/fechas repetidas del mismo título y recinto.
+    events = merge_cinema_cycle_sources(events)
     events = merge_repeated_events(events)
     events = enrich_ticket_links(events)
     return sorted(events, key=lambda e: (e.start, e.time, norm(e.title)))
+
+def merge_cinema_cycle_sources(events: list[Event]) -> list[Event]:
+    """Fusiona el mismo ciclo publicado por Cines Victoria y Cineclub Fórum.
+    Se prefiere Cineclub Fórum como recinto/fuente cuando existe, aunque las
+    sesiones se celebren en Cines Victoria.
+    """
+    cycle_groups = {}
+    ordinary = []
+    for ev in events:
+        key = cinema_cycle_key(ev.title) if ev.genre == "Cine" else None
+        if key:
+            cycle_groups.setdefault(key, []).append(ev)
+        else:
+            ordinary.append(ev)
+    for group in cycle_groups.values():
+        forum = next((e for e in group if canonical_venue(e.location, e.organizer) == "Cineclub Fórum"), None)
+        victoria = next((e for e in group if canonical_venue(e.location, e.organizer) == "Cines Victoria"), None)
+        chosen = forum or victoria or group[0]
+        chosen.cinema_info_only = True
+        chosen.session_times = []
+        chosen.time = ""
+        chosen.tags = ["🎬"]
+        ordinary.append(chosen)
+    return ordinary
 
 def merge_repeated_events(events: list[Event]) -> list[Event]:
     groups = {}
@@ -947,6 +1018,10 @@ def event_group_key(ev: Event):
 def display_genre(ev: Event) -> str:
     """Categoría corta y útil para Telegram, sin descripciones largas."""
     text = norm(f"{ev.title} {ev.description} {ev.category}")
+    if norm(ev.source) == "palcongrex":
+        override = palcongrex_title_genre(ev.title)
+        if override:
+            return override
     base = ev.genre or "Teatro"
 
     if base == "Cine":
@@ -1044,9 +1119,6 @@ def render_cinema_group(group: list[Event]) -> str:
     if spectator:
         label = f"Día del espectador ({spectator_day})" if spectator_day else "Día del espectador"
         block += f"\n    🎟️ {html.escape(label)}: {html.escape(spectator)}"
-    if promotion:
-        block += f"\n    🏷️ Ticket Descuento: {html.escape(promotion)}"
-
     movie_url = next((e.cinema_movie_url for e in group if e.cinema_movie_url), "")
     target = movie_url or next((e.ticket_url for e in group if e.ticket_url), "") or VENUE_TICKET_LINKS.get("Cines Victoria", "")
     if target:
