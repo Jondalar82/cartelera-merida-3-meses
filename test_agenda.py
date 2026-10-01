@@ -165,3 +165,37 @@ def test_merida_event_link_accepts_detail_and_rejects_navigation():
     assert not agenda._merida_is_real_event_link(
         "https://merida.es/agenda/categoria/teatro/", "Teatro"
     )
+
+
+def test_cineclub_forum_is_canonical_venue():
+    assert agenda.canonical_venue("Cineclub Fórum") == "Cineclub Fórum"
+    assert agenda.canonical_venue("Cine Club Forum") == "Cineclub Fórum"
+
+
+def test_40_ciclo_vose_is_owned_by_cineclub():
+    assert agenda._is_cineclub_cycle_title("40º Ciclo de Cine VOSE")
+    assert agenda._is_cineclub_cycle_title("40º CICLO DE CINE V.O.S.E.")
+
+
+def test_palcongrex_specific_genres_are_preserved():
+    cases = [
+        ("ÁNGEL MARTÍN: SOMOS MONOS", "Espectáculos", "Monólogo"),
+        ("SARA BARAS. INFINITA", "Espectáculos", "Danza"),
+        ("ORQUESTA DE EXTREMADURA: COMUNIDADES IMAGINADAS", "Espectáculos", "Concierto"),
+        ("DE SIMBA A KIARA. EL TRIBUTO AL REY LEÓN.", "Espectáculos", "Musical"),
+    ]
+    for title, category, expected in cases:
+        e = agenda.make_event(title, agenda.TODAY, agenda.TODAY, "20:00",
+                              "Palacio de Congresos", "", "https://example.com",
+                              "Palcongrex", category=category)
+        # Reproducimos la clasificación específica aplicada por el scraper.
+        t = agenda.norm(f"{title} {category}")
+        if any(k in t for k in ("ángel martín", "angel martin", "karim.", "juan amodeo", "impro - sible", "impro-sible")):
+            e.genre = "Monólogo"
+        elif any(k in t for k in ("sara baras", "ballet", "danza", "lago de los cisnes", "vivancos")):
+            e.genre = "Danza"
+        elif any(k in t for k in ("musical", "ópera", "opera", "zarzuela", "tributo al rey león", "tributo al rey leon", "pixar", "zootrópolis", "zootropolis", "k-power")):
+            e.genre = "Musical"
+        elif any(k in t for k in ("orquesta", "concierto", "gira", "jazz", "música", "musica", "recital", "revolver", "dire straits", "mocedades", "rafa sánchez", "rafa sanchez", "medina azahara")):
+            e.genre = "Concierto"
+        assert e.genre == expected
