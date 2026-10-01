@@ -820,31 +820,110 @@ def scrape_cines_victoria() -> list[Event]:
     return events
 
 
+def _is_cineclub_cycle_title(title: str) -> bool:
+    t = norm(title).replace("º", "o").replace("°", "o")
+    return (
+        "40o ciclo" in t
+        or "40 ciclo" in t
+        or ("ciclo de cine" in t and ("vose" in t or "v.o.s.e" in t))
+    )
+
+
 def scrape_cineclub_merida() -> list[Event]:
-    """Fuente complementaria del Cine Club Fórum. Se usa como fuente de
-    confirmación/enlace, no para inventar fechas que no estén publicadas."""
+    """Agenda del Cine Club Fórum.
+
+    La página actual presenta las sesiones como encabezados de fecha seguidos
+    del título de la película. El scraper anterior dependía de contenedores
+    article/card y podía devolver cero eventos aunque la programación estuviera
+    visible.
+    """
     url = "https://festivalcinemerida.com/cineclub/"
     soup = fetch(url)
     if not soup:
         return []
+
     events = []
-    for node in soup.select("article, li, .event, .evento, .card, .elementor-widget-container"):
-        txt = clean_text(node.get_text(" ", strip=True), 1200)
-        if len(txt) < 20:
+    date_re = re.compile(
+        r"^(?:#\s*)?(\d{1,2})\s+(?:de\s+)?"
+        r"(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|"
+        r"octubre|noviembre|diciembre)\b.*?(\d{4})?$",
+        re.I
+    )
+    month_map = {
+        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+        "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
+        "noviembre": 11, "diciembre": 12,
+    }
+
+    headings = soup.select("h1, h2, h3, h4, h5")
+    for idx, heading in enumerate(headings):
+        date_text = clean_text(heading.get_text(" ", strip=True), 220)
+        m = date_re.match(date_text)
+        if not m:
             continue
-        st, en = parse_date(txt)
-        if not st or not (TODAY <= st <= END_DATE):
+        day = int(m.group(1))
+        month = month_map[m.group(2).lower()]
+        year = int(m.group(3)) if m.group(3) else TODAY.year
+        try:
+            st = date(year, month, day)
+        except ValueError:
             continue
-        a = node.find("a", href=True)
-        title = clean_text(a.get_text(" ", strip=True), 180) if a else ""
+        if not (TODAY <= st <= END_DATE):
+            continue
+
+        title = ""
+        title_node = None
+        for nxt in headings[idx + 1: idx + 6]:
+            candidate = clean_text(nxt.get_text(" ", strip=True), 220)
+            if not candidate:
+                continue
+            if date_re.match(candidate):
+                break
+            low = norm(candidate)
+            if low in {"lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"}:
+                continue
+            if "leer más" in low or "leer mas" in low:
+                continue
+            if _is_cineclub_cycle_title(candidate):
+                continue
+            # El detalle de cada película aparece como h4/h3. Quitamos el país
+            # y año del título para que Telegram muestre solo el nombre.
+            title = re.split(
+                r"\s+[-–—]\s+(?:españa|ee\.uu\.|eeuu|francia|italia|alemania)\b",
+                candidate, maxsplit=1, flags=re.I
+            )[0].strip()
+            title = clean_text(title, 180)
+            title_node = nxt
+            break
         if not title or len(title) < 3:
             continue
-        ev = make_event(title, st, en, extract_time(txt), "Cineclub Fórum",
-                        txt, urljoin(url, a.get("href")) if a else url,
-                        "Cine Club Fórum", category="Cine", city="Mérida")
+
+        parent_text = ""
+        try:
+            parent_text = clean_text(
+                (title_node.parent if title_node else heading.parent).get_text(" ", strip=True),
+                1200
+            )
+        except Exception:
+            parent_text = date_text
+        tm = extract_time(date_text) or extract_time(parent_text)
+        href = url
+        if title_node:
+            a = title_node.find("a", href=True)
+            if a:
+                href = urljoin(url, a.get("href"))
+
+        ev = make_event(
+            title, st, st, tm, "Cineclub Fórum", parent_text, href,
+            "Cine Club Fórum", category="Cine", city="Mérida"
+        )
         ev.genre = "Cine"
         events.append(ev)
-    return events
+
+    unique = {}
+    for ev in events:
+        unique[(norm(ev.title), ev.start)] = ev
+    return list(unique.values())
 
 def is_valid_cartelera_event(ev: Event) -> bool:
     if ev.city and norm(ev.city) not in {"mérida", "merida"}:
