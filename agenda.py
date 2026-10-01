@@ -803,6 +803,10 @@ def scrape_cines_victoria() -> list[Event]:
         title = re.sub(r"\s+ver el ciclo(?:\s*[↓↘→])?$", "", title, flags=re.I)
         title = re.sub(r"\s+\d{1,2}\s+(?:de\s+)?[a-záéíóú]+\s*[–-]\s*\d{1,2}\s+(?:de\s+)?[a-záéíóú]+(?:\s+\d{4})?$", "", title, flags=re.I)
         low = norm(title)
+        # El 40º Ciclo de Cine VOSE pertenece al Cineclub Fórum; no debe
+        # duplicarse en Cines Victoria aunque la página de Victoria enlace a él.
+        if _is_cineclub_cycle_title(title):
+            continue
         if "ciclo" not in low or not href or href in cycle_seen:
             continue
         if "compraentradas.com" not in href and "/cine/" not in href:
