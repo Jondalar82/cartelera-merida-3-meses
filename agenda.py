@@ -924,6 +924,23 @@ def scrape_cineclub_merida() -> list[Event]:
         ev.genre = "Cine"
         events.append(ev)
 
+    # El ciclo se publica como actividad propia además de las películas.
+    # Lo mantenemos como ficha informativa para que aparezca explícitamente en
+    # Cineclub Fórum y no se pierda al deduplicar las sesiones.
+    cycle_start = max(TODAY, date(2026, 9, 14))
+    cycle_end = date(2026, 10, 26)
+    if cycle_start <= END_DATE and cycle_end >= TODAY:
+        cycle = make_event(
+            "40º Ciclo de Cine VOSE", cycle_start, cycle_end, "",
+            "Cineclub Fórum",
+            "40º Ciclo de Cine VOSE · 14 septiembre al 26 de octubre de 2026",
+            url, "Cine Club Fórum", category="Cine", city="Mérida"
+        )
+        cycle.genre = "Cine"
+        cycle.cinema_info_only = True
+        cycle.ticket_url = url
+        events.append(cycle)
+
     unique = {}
     for ev in events:
         unique[(norm(ev.title), ev.start)] = ev
