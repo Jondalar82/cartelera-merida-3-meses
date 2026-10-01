@@ -442,7 +442,21 @@ def scrape_palcongrex() -> list[Event]:
             seen.add(key)
             a=row.find("a",href=True); href=urljoin(url,a.get("href")) if a else url
             ev=make_event(title,st,en,"","Palacio de Congresos","",href,"Palcongrex",city="Mérida",category=typ)
-            if norm(typ)=="espectáculos": ev.genre="Teatro"
+            # Palcongrex usa "Espectáculos" como categoría paraguas; inferimos
+            # una categoría concreta por título para que Telegram sea más útil.
+            t = norm(f"{title} {typ}")
+            if any(k in t for k in ("monólogo", "monologo", "humor", "stand-up")):
+                ev.genre = "Monólogo"
+            elif any(k in t for k in ("musical", "ópera", "opera", "zarzuela")):
+                ev.genre = "Musical"
+            elif any(k in t for k in ("sara baras", "flamenco", "ballet", "danza")):
+                ev.genre = "Danza"
+            elif any(k in t for k in ("orquesta", "concierto", "gira", "jazz", "música", "musica", "recital")):
+                ev.genre = "Concierto"
+            elif any(k in t for k in ("circo", "pando el mago", "mago")):
+                ev.genre = "Teatro"
+            elif norm(typ) == "espectáculos":
+                ev.genre = "Teatro"
             if ev.genre: events.append(ev); page_found+=1
         if page_found==0 and page>0: break
     return events
@@ -618,6 +632,27 @@ def _extract_price(text: str, patterns: list[str]) -> str:
             if re.fullmatch(r"\d{1,2}(?:,\d{1,2})?", value):
                 return value + " €"
     return ""
+
+def _cinema_genre(title: str, description: str = "") -> str:
+    """Género visible de la película, sin repetir 'Cine'."""
+    t = norm(f"{title} {description}")
+    if any(k in t for k in ("animación", "animacion", "anime", "pixar", "disney")):
+        return "Animación"
+    if any(k in t for k in ("terror", "horror", "miedo", "vampiro", "zombi", "zombie")):
+        return "Terror"
+    if any(k in t for k in ("thriller", "suspense")):
+        return "Thriller"
+    if any(k in t for k in ("ciencia ficción", "ciencia ficcion", "sci-fi", "futuro")):
+        return "Ciencia ficción"
+    if any(k in t for k in ("romance", "romántica", "romantica", "amor")):
+        return "Romance"
+    if any(k in t for k in ("comedia", "humor")):
+        return "Comedia"
+    if any(k in t for k in ("acción", "accion", "aventura")):
+        return "Acción/Aventura"
+    if "drama" in t:
+        return "Drama"
+    return "Película"
 
 def _cinema_icon(text: str) -> str:
     t = norm(text)
@@ -926,14 +961,14 @@ def venue_icon(venue: str) -> str:
 
 def venue_display_name(venue: str) -> str:
     return {
-        "Cines Victoria": "Cines Victoria · Mérida",
-        "Palacio de Congresos": "Palacio de Congresos · Mérida",
-        "Teatro María Luisa": "Teatro María Luisa · Mérida",
-        "Teatro Romano": "Teatro Romano · Mérida",
-        "Sala Trajano": "Sala Trajano · Mérida",
-        "Centro Cultural Alcazaba": "Centro Cultural Alcazaba · Mérida",
-        "Cineclub Fórum": "Cineclub Fórum · Mérida",
-    }.get(venue, f"{venue} · Mérida")
+        "Cines Victoria": "Cines Victoria",
+        "Palacio de Congresos": "Palacio de Congresos",
+        "Teatro María Luisa": "Teatro María Luisa",
+        "Teatro Romano": "Teatro Romano",
+        "Sala Trajano": "Sala Trajano",
+        "Centro Cultural Alcazaba": "Centro Cultural Alcazaba",
+        "Cineclub Fórum": "Cineclub Fórum",
+    }.get(venue, venue)
 
 
 def venue_sort_key(venue: str):
@@ -945,34 +980,52 @@ def event_group_key(ev: Event):
 
 
 def display_genre(ev: Event) -> str:
-    """Categoría corta y útil para Telegram, sin descripciones largas."""
+    """Categoría compacta y específica para Telegram."""
     text = norm(f"{ev.title} {ev.description} {ev.category}")
     base = ev.genre or "Teatro"
 
     if base == "Cine":
         return "Cine"
-    if any(k in text for k in ("monologo", "monólogo", "stand-up", "stand up")):
+
+    if base == "Concierto":
+        if any(k in text for k in ("orquesta", "piano", "pianista", "sinfónica", "sinfonica")):
+            return "Concierto-Orquesta"
+        if "jazz" in text:
+            return "Concierto-Jazz"
+        if "flamenco" in text:
+            return "Concierto-Flamenco"
+        return "Concierto"
+
+    if base == "Monólogo":
         return "Monólogo"
+
     if base == "Musical":
-        if any(k in text for k in ("familiar", "familia", "infantil", "ninos", "niños")):
+        if any(k in text for k in ("familiar", "familia", "infantil", "niños", "ninos")):
             return "Musical-Familiar"
         if any(k in text for k in ("comedia", "humor")):
             return "Musical-Comedia"
         return "Musical"
-    if base == "Teatro":
-        if any(k in text for k in ("familiar", "familia", "infantil")):
-            return "Teatro-Familiar"
-        if any(k in text for k in ("comedia", "humor")):
-            return "Teatro-Comedia"
-        if any(k in text for k in ("thriller", "misterio", "suspense")):
-            return "Teatro-Thriller"
-        return "Teatro"
+
     if base == "Danza":
         if "flamenco" in text:
             return "Danza-Flamenco"
         if "ballet" in text:
             return "Danza-Ballet"
         return "Danza"
+
+    if base == "Teatro":
+        if any(k in text for k in ("monólogo", "monologo", "stand-up", "stand up", "humor")):
+            return "Monólogo"
+        if any(k in text for k in ("familiar", "familia", "infantil", "niños", "ninos")):
+            return "Teatro-Familiar"
+        if any(k in text for k in ("comedia", "humor")):
+            return "Teatro-Comedia"
+        if any(k in text for k in ("thriller", "misterio", "suspense")):
+            return "Teatro-Thriller"
+        if "circo" in text:
+            return "Circo"
+        return "Teatro"
+
     return base
 
 
@@ -992,14 +1045,18 @@ def compact_event_line(ev: Event) -> str:
 def render_cinema_group(group: list[Event]) -> str:
     first = sorted(group, key=lambda e: (e.start, e.time))[0]
     if getattr(first, "cinema_info_only", False):
-        block = f"• <b>{html.escape(first.title)}</b>\n    Cine"
+        block = f"• <b>{html.escape(first.title)}</b>"
         target = first.ticket_url or first.url
         if target:
             block += f'\n    <a href="{html.escape(target, quote=True)}">🔗 Entradas / info</a>'
         return block
 
     block = f"• <b>{html.escape(first.title)}</b>"
-    block += "\n    Cine"
+    # En cine no repetimos la palabra "Cine": mostramos emoji + género.
+    icon = first.tags[0] if first.tags else _cinema_icon(first.title)
+    genre = _cinema_genre(first.title, first.description)
+    block += f"\n    {icon} {html.escape(genre)}"
+
     times = []
     for ev in group:
         times.extend(ev.session_times or ([ev.time] if ev.time else []))
@@ -1048,15 +1105,27 @@ def render_event_group(group: list[Event]) -> str:
 def render_venue_block(venue: str, groups: list[list[Event]]) -> str:
     target = VENUE_TICKET_LINKS.get(venue, "")
     link = f' <a href="{html.escape(target, quote=True)}">Entradas / info</a>' if target else ""
-    # Encabezado de recinto muy visible para que, incluso si Telegram corta
-    # un bloque entre mensajes, quede inequívoca la ubicación.
     display = venue_display_name(venue)
     header = (f"━━━━━━━━━━━━━━━━━━━━\n"
               f"{venue_icon(venue)} <b>{html.escape(display)}</b>{link}\n"
               f"━━━━━━━━━━━━━━━━━━━━")
 
+    extra = ""
+    if venue == "Cines Victoria":
+        # Información general del cine una sola vez en la cabecera.
+        sample = next((e for g in groups for e in g if not e.cinema_info_only), None)
+        if sample:
+            general = sample.cinema_general_price or "precio no publicado en la web"
+            day = sample.cinema_spectator_day or "miércoles"
+            spectator = sample.cinema_spectator_price or "precio no publicado en la web"
+            extra = (
+                f"\n💶 General: {html.escape(general)}"
+                f" · 🟢 Día del espectador: {html.escape(day)} · {html.escape(spectator)}"
+            )
+            if sample.cinema_promotion:
+                extra += f"\n    🎟️ Promoción publicada: {html.escape(sample.cinema_promotion)}"
     body = "\n\n".join(render_event_group(g) for g in groups)
-    return header + "\n" + body
+    return header + extra + "\n" + body
 
 def build_venue_blocks(events: list[Event]) -> list[str]:
     venues = {}
