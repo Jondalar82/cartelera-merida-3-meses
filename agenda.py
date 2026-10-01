@@ -59,6 +59,10 @@ VENUE_ALIASES = {
     "sala trajano": "Sala Trajano",
     "cines victoria": "Cines Victoria",
     "cine victoria": "Cines Victoria",
+    "cineclub fórum": "Cineclub Fórum",
+    "cineclub forum": "Cineclub Fórum",
+    "cine club fórum": "Cineclub Fórum",
+    "cine club forum": "Cineclub Fórum",
     "acueducto de los milagros": "Acueducto de los Milagros",
 }
 
@@ -442,22 +446,25 @@ def scrape_palcongrex() -> list[Event]:
             seen.add(key)
             a=row.find("a",href=True); href=urljoin(url,a.get("href")) if a else url
             ev=make_event(title,st,en,"","Palacio de Congresos","",href,"Palcongrex",city="Mérida",category=typ)
-            # Palcongrex usa "Espectáculos" como categoría paraguas; inferimos
-            # una categoría concreta por título para que Telegram sea más útil.
+            # Palcongrex usa "Espectáculos" como categoría paraguas. No
+            # descartamos un espectáculo válido por no contener una palabra
+            # genérica en el título: aplicamos reglas específicas y después
+            # conservamos el resto de "Espectáculos" como Teatro.
             t = norm(f"{title} {typ}")
-            if any(k in t for k in ("monólogo", "monologo", "humor", "stand-up")):
+            if any(k in t for k in ("ángel martín", "angel martin", "karim.", "juan amodeo", "impro - sible", "impro-sible")):
                 ev.genre = "Monólogo"
-            elif any(k in t for k in ("musical", "ópera", "opera", "zarzuela")):
-                ev.genre = "Musical"
-            elif any(k in t for k in ("sara baras", "flamenco", "ballet", "danza")):
+            elif any(k in t for k in ("sara baras", "ballet", "danza", "lago de los cisnes", "vivancos")):
                 ev.genre = "Danza"
-            elif any(k in t for k in ("orquesta", "concierto", "gira", "jazz", "música", "musica", "recital")):
+            elif any(k in t for k in ("musical", "ópera", "opera", "zarzuela", "tributo al rey león", "tributo al rey leon", "pixar", "zootrópolis", "zootropolis", "k-power")):
+                ev.genre = "Musical"
+            elif any(k in t for k in ("orquesta", "concierto", "gira", "jazz", "música", "musica", "recital", "revolver", "dire straits", "mocedades", "rafa sánchez", "rafa sanchez", "medina azahara")):
                 ev.genre = "Concierto"
-            elif any(k in t for k in ("circo", "pando el mago", "mago")):
+            elif any(k in t for k in ("circo", "pando el mago", "pando", "mago")):
                 ev.genre = "Teatro"
             elif norm(typ) == "espectáculos":
                 ev.genre = "Teatro"
-            if ev.genre: events.append(ev); page_found+=1
+            if ev.genre:
+                events.append(ev); page_found += 1
         if page_found==0 and page>0: break
     return events
 
