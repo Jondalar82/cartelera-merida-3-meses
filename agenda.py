@@ -107,6 +107,9 @@ class Event:
     score: int = 0
     tags: list[str] = field(default_factory=list)
     session_times: list[str] = field(default_factory=list)
+    # Cartelera de Cines Victoria por fecha (ISO -> sesiones). Se conserva
+    # para mostrar la semana completa y destacar las sesiones de HOY.
+    cinema_sessions_by_date: dict[str, list[str]] = field(default_factory=dict)
     cinema_general_price: str = ""
     cinema_spectator_price: str = ""
     cinema_spectator_day: str = "miércoles"
@@ -578,6 +581,13 @@ def dedupe(events: list[Event]) -> list[Event]:
                 old.description = ev.description
             if not old.time and ev.time:
                 old.time = ev.time
+            if getattr(ev, "cinema_sessions_by_date", None):
+                for day, times in ev.cinema_sessions_by_date.items():
+                    old.cinema_sessions_by_date.setdefault(day, [])
+                    old.cinema_sessions_by_date[day] = sorted(
+                        set(old.cinema_sessions_by_date[day]) | set(times),
+                        key=lambda x: (int(x[:2]), int(x[3:]))
+                    )
             if old.title.isupper() and not ev.title.isupper():
                 old.title = ev.title
             # Conservamos el enlace de la fuente oficial más directa.
@@ -775,16 +785,27 @@ def scrape_cines_victoria() -> list[Event]:
             if times:
                 by_date[d] = times
 
-        # Solo se muestran las sesiones del viernes de la ejecución.
-        friday_times = by_date.get(FRIDAY_DATE, [])
-        if not friday_times:
+        # Mostramos la cartelera de la semana en curso (hoy + próximos
+        # seis días), pero conservamos las sesiones separadas por fecha para
+        # poder destacar las de HOY en Telegram.
+        week_end = TODAY + timedelta(days=6)
+        week_schedule = {
+            d.isoformat(): times
+            for d, times in by_date.items()
+            if TODAY <= d <= week_end and times
+        }
+        if not week_schedule:
             continue
+
+        first_day = min(date.fromisoformat(k) for k in week_schedule)
+        first_times = week_schedule[first_day.isoformat()]
         icon = _cinema_icon(txt)
-        ev = make_event(title, FRIDAY_DATE, FRIDAY_DATE, friday_times[0],
+        ev = make_event(title, TODAY, first_day, first_times[0],
                         "Cines Victoria", txt, ticket_url or movie_url or url,
                         "Cines Victoria", category="Cine", city="Mérida")
         ev.genre = "Cine"
-        ev.session_times = friday_times
+        ev.session_times = first_times
+        ev.cinema_sessions_by_date = week_schedule
         ev.cinema_general_price = general_price
         ev.cinema_spectator_price = spectator_price
         ev.cinema_spectator_day = spectator_day or "miércoles"
@@ -1159,17 +1180,44 @@ def render_cinema_group(group: list[Event]) -> str:
         return block
 
     block = f"• <b>{html.escape(first.title)}</b>"
-    # En cine no repetimos la palabra "Cine": mostramos emoji + género.
     icon = first.tags[0] if first.tags else _cinema_icon(first.title)
     genre = _cinema_genre(first.title, first.description)
     block += f"\n    {icon} {html.escape(genre)}"
 
-    times = []
+    schedule = {}
     for ev in group:
-        times.extend(ev.session_times or ([ev.time] if ev.time else []))
-    times = sorted(set(times), key=lambda x: (int(x[:2]), int(x[3:])))
-    if times:
-        block += f"\n    {fmt_date_es(FRIDAY_DATE)} · " + ", ".join(html.escape(t) for t in times)
+        for day, times in getattr(ev, "cinema_sessions_by_date", {}).items():
+            schedule.setdefault(day, set()).update(times)
+
+    # Compatibilidad con eventos antiguos que solo tengan session_times.
+    if not schedule and first.session_times:
+        schedule[TODAY.isoformat()] = set(first.session_times)
+
+    def sort_times(values):
+        return sorted(values, key=lambda x: (int(x[:2]), int(x[3:])))
+
+    # Primero, siempre las sesiones del día en que se ejecuta el repositorio.
+    today_key = TODAY.isoformat()
+    today_times = sort_times(schedule.get(today_key, set()))
+    if today_times:
+        block += (
+            f"\n    📍 <b>HOY {fmt_date_es(TODAY)}:</b> "
+            + ", ".join(html.escape(t) for t in today_times)
+        )
+
+    # Después, la cartelera de los próximos días de la semana.
+    future_lines = []
+    for day_key in sorted(schedule):
+        if day_key == today_key:
+            continue
+        d = date.fromisoformat(day_key)
+        times = sort_times(schedule[day_key])
+        if times:
+            future_lines.append(
+                f"{fmt_date_es(d)}: " + ", ".join(html.escape(t) for t in times)
+            )
+    if future_lines:
+        block += "\n    📅 " + " · ".join(future_lines)
 
     movie_url = next((e.cinema_movie_url for e in group if e.cinema_movie_url), "")
     target = movie_url or next((e.ticket_url for e in group if e.ticket_url), "") or VENUE_TICKET_LINKS.get("Cines Victoria", "")
@@ -1177,7 +1225,6 @@ def render_cinema_group(group: list[Event]) -> str:
         label = "🔗 Película / horarios" if movie_url else "🔗 Entradas / info"
         block += f'\n    <a href="{html.escape(target, quote=True)}">{label}</a>'
     return block
-
 
 def render_event_group(group: list[Event]) -> str:
     """Título + género + sesiones + enlace; sin descripciones."""
